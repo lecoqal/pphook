@@ -14,3 +14,4 @@ gpg --symmetric --cipher-algo AES256 --output .env.gpg .env
 
 # Supprimer le fichier en clair
 rm .env
+rm ../global_vars.sh

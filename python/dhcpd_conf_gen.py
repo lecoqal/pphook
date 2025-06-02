@@ -13,7 +13,7 @@ subprocess.run(command, shell=True, capture_output=True, text=True, executable='
 
 import json
 import configparser
-from pdns import PowerDNSAPI as pdns
+from phpipam import PhpIPAMAPI as ipam
 from jinja2 import Environment, FileSystemLoader
 
 env = Environment(loader=FileSystemLoader("templates/"))
@@ -47,8 +47,17 @@ DB_HOST = vars["DB_IP"]
 DB_USER = vars["PDNS_DB_USER"]
 DB_PASSWORD = vars["PDNS_DB_PASS"]
 DB_NAME = vars["PDNS_DB_NAME"]
+IPAM_IP = vars["IPAM_IP"]
+IPAM_API_URL = vars["IPAM_API_URL"]
+IPAM_APP_ID = vars["IPAM_APP_ID"]
+IPAM_USERNAME = vars["IPAM_USERNAME"]
+IPAM_PASSWORD = vars["IPAM_PASSWORD"]
 
 # Proxy Restriction Bypass
-os.environ['no_proxy'] = f'{PDNS_IP},localhost,127.0.0.1'
-os.environ['NO_PROXY'] = f'{PDNS_IP},localhost,127.0.0.1'
+os.environ['no_proxy'] = f'{IPAM_IP},localhost,127.0.0.1'
+os.environ['NO_PROXY'] = f'{IPAM_IP},localhost,127.0.0.1'
 
+phpipam = ipam(IPAM_API_URL, IPAM_APP_ID, IPAM_USERNAME, IPAM_PASSWORD)
+phpipam.authenticate()
+ipaddrs = phpipam.get_addresses()
+print(ipaddrs) 
