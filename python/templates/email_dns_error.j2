@@ -1,0 +1,21 @@
+Bonjour,
+
+Une erreur DNS a été détectée pour {{ hostname }} ({{ ip }}).
+Lien phpIPAM: http://{{ ip_ipam }}/subnets/3/{{ subnet_id }}/address-details/{{ address_id }}
+
+Erreur: {{ error_message }}
+Utilisateur: {{ username }}
+Date: {{ edit_date }}
+Action: {{ action }}
+
+Informations de l'adresse:
+- ID: {{ address.get('id', 'Inconnu') }}
+- Sous-réseau: {{ address.get('subnetId', 'Inconnu') }}
+- État: {{ address.get('state', 'Inconnu') }}
+
+Cette entrée a été supprimée ou corrigée automatiquement
+
+
+Système PPHOOK - {{ timestamp }}
+Ce message a étéé généré automatiquement par le système PPHOOK.
+Veuillez ne pas répondre à ce message.

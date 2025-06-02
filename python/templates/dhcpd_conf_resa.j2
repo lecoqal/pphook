@@ -1,0 +1,17 @@
+# Réservations INFRA
+{% for ip in reservations_infra %}
+host {{ ip.hostname }} {
+    option host-name "{{ ip.hostname }}";
+    hardware ethernet {{ ip.mac }};
+    fixed-address {{ ip.ip }};
+}
+{% endfor %}
+
+# Réservations LISE
+{% for ip in reservations_lise %}
+host {{ ip.hostname }} {
+    option host-name "{{ ip.hostname }}";
+    hardware ethernet {{ ip.mac }};
+    fixed-address {{ ip.ip }};
+}
+{% endfor %}

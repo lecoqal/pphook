@@ -1,0 +1,22 @@
+Bonjour,
+
+Un doublon MAC a été détecté et corrigé.
+
+MAC en doublon: {{ duplicate_mac }}
+La MAC a été supprimée de l'adresse la plus récemment modifiée
+
+[MAC SUPPRIMÉE]
+IP source: {{ ip }}
+IP hostname: {{ hostname }}
+Utilisateur: {{ username }}
+Date: {{ edit_date }}
+Lien phpIPAM: http://{{ ip }}/subnets/3/{{ subnet_id }}/address-details/{{ address_id }}
+
+[MAC GARDÉE]
+IP source: {{ ip_target }}
+IP hostname: {{ hostname_target }}
+Lien phpIPAM: http://{{ ip_target }}/subnets/3/{{ subnet_id_target }}/address-details/{{ address_id_target }}
+
+Système PPHOOK - {{ timestamp }}
+Ce message est généré automatiquement par le système PPHOOK.
+Veuillez ne pas répondre à ce message.

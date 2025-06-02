@@ -46,6 +46,10 @@ import ipaddress
 import configparser
 import base64
 import importlib
+from jinja2 import Environment, FileSystemLoader
+
+# Configuration Jinja2
+env = Environment(loader=FileSystemLoader("/opt/pphook/templates/"))
 
 # Import explicite du module datetime standard
 std_datetime = importlib.import_module('datetime')
@@ -123,6 +127,9 @@ MAX_HOSTNAME_LENGTH = CONFIG.getint('validation', 'max_hostname_length', fallbac
 # Configuration du script
 CHECK_INTERVAL = CONFIG.getint('script', 'check_interval', fallback=60)  # 1 minute par défaut
 LAST_CHECK_FILE = CONFIG.get('script', 'last_check_file', fallback='/var/lib/pphook/last_check')
+EMAIL_TEMPLATE_MAC_DUPLICATE = "email_mac_duplicate.j2"
+EMAIL_TEMPLATE_HOSTNAME_DUPLICATE = "email_hostname_duplicate.j2"
+EMAIL_TEMPLATE_DNS_ERROR = "email_dns_error.j2"
 
 # =================================================
 #  +-----------------------------------------+
@@ -172,8 +179,8 @@ def validate_subnet_ip(ip, subnet):
 #  +-----------------------------------------+
 # =================================================
 
-def send_email(subject, body, recipient=None):
-    """Envoie un email de notification"""
+def send_email(subject, body_content, recipient=None):
+    """Envoie un email simple"""
     if recipient is None:
         recipient = EMAIL_TO
 
@@ -181,8 +188,7 @@ def send_email(subject, body, recipient=None):
     msg['From'] = EMAIL_FROM
     msg['To'] = recipient
     msg['Subject'] = subject
-
-    msg.attach(MIMEText(body, 'plain'))
+    msg.attach(MIMEText(body_content, 'plain', 'utf-8'))
 
     try:
         if SMTP_USE_TLS:
@@ -196,122 +202,93 @@ def send_email(subject, body, recipient=None):
 
         server.send_message(msg)
         server.quit()
-
         logger.info(f"Email envoyé à {recipient}")
         return True
     except Exception as e:
-        logger.error(f"Erreur lors de l'envoi de l'email: {str(e)}")
+        logger.error(f"Erreur envoi email: {str(e)}")
         return False
 
-def notify_mac_duplicate(duplicate_info):
-    """
-    Envoie une notification pour un doublon MAC détecté et corrigé
-    VERSION CORRIGÉE : Avec le bon format de liens phpIPAM
-    
-    Args:
-        duplicate_info (dict): Informations sur le doublon détecté
-    """
-    mac = duplicate_info['mac']
-    addresses = duplicate_info['addresses']
-    removed_from = duplicate_info['removed_from']
-    
-    subject = f"[ALERTE MAC CORRIGÉE] Doublon d'adresse MAC automatiquement résolu: {mac}"
-    
-    # Extraire l'IP de base de PHPIPAM_URL
-    phpipam_base = PHPIPAM_URL.replace('/api', '').replace('http://', '').replace('https://', '')
-    
-    body = f"""Bonjour,
-
-Un doublon d'adresse MAC a été détecté et automatiquement corrigé dans l'infrastructure :
-
-Adresse MAC en doublon: {mac}
-
-ACTION AUTOMATIQUE EFFECTUÉE:
-La MAC a été supprimée de l'adresse la plus récemment modifiée :
-- IP: {removed_from['ip']}
-- Hostname: {removed_from['hostname'] or 'Non défini'}
-- Lien phpIPAM: http://{phpipam_base}/subnets/3/{removed_from['subnetId']}/address-details/{removed_from['id']}/
-
-Toutes les adresses concernées par ce doublon:
-"""
-    
-    for i, addr in enumerate(addresses, 1):
-        status = " [MAC SUPPRIMÉE]" if addr['id'] == removed_from['id'] else ""
-        body += f"""
-  {i}. IP: {addr['ip']}{status}
-     Hostname: {addr['hostname'] or 'Non défini'}
-     Lien phpIPAM: http://{phpipam_base}/subnets/3/{addr['subnetId']}/address-details/{addr['id']}/
-     Sous-réseau: {addr['subnetId']}
-     Dernière modification: {addr['editDate']}
-"""
-    
-    body += f"""
-Le conflit a été résolu automatiquement. Veuillez vérifier la configuration réseau si nécessaire.
-
-ACTIONS RECOMMANDÉES:
-1. Vérifier que l'équipement concerné fonctionne correctement
-2. Corriger la MAC si elle était incorrecte dans phpIPAM
-3. S'assurer qu'aucun équipement physique n'utilise la même MAC
-
-Ce message est généré automatiquement par le système de validation PPHOOK.
-Veuillez ne pas répondre à ce message.
-"""
-    
-    # Envoyer la notification
-    success = send_email(subject, body)
-    if success:
-        logger.info(f"Notification de doublon MAC corrigé envoyée pour {mac}")
-    else:
-        logger.error(f"Échec d'envoi de notification pour le doublon MAC {mac}")
+def notify_error(address, hostname, ip, error_message, username="Utilisateur inconnu", 
+                edit_date="Date inconnue", action="", duplicate_address=None, duplicate_mac=None):
+    """Notification d'erreur universelle avec templates conditionnels"""
+    try:
+        # Déterminer template et sujet
+        if duplicate_address:
+            template_name = EMAIL_TEMPLATE_HOSTNAME_DUPLICATE
+            subject = f"[DOUBLON HOSTNAME] {hostname}"
+        elif duplicate_mac:
+            template_name = EMAIL_TEMPLATE_MAC_DUPLICATE
+            subject = f"[DOUBLON MAC] {duplicate_mac}"
+        else:
+            template_name = EMAIL_TEMPLATE_DNS_ERROR
+            subject = f"[ERREUR DNS] {hostname}"
+        
+        # Variables communes
+        template_vars = {
+            'address': address,
+            'hostname': hostname,
+            'ip': ip,
+            'error_message': error_message,
+            'username': username,
+            'edit_date': edit_date,
+            'action': action,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'ip_ipam': PHPIPAM_URL.replace('/api', '').replace('http://', '').replace('https://', ''),
+            'subnet_id': address.get('subnetId', 'Inconnu'),
+            'address_id': address.get('id', 'Inconnu'),
+            'duplicate_mac': duplicate_mac
+        }
+        
+        # Variables spécifiques aux doublons hostname
+        if duplicate_address:
+            template_vars.update({
+                'duplicate_address_ip': duplicate_address.get('ip'),
+                'duplicate_subnet_id': duplicate_address.get('subnetId'),
+                'duplicate_address_id': duplicate_address.get('id')
+            })
+        
+        # Rendu du template
+        template = env.get_template(template_name)
+        content = template.render(**template_vars)
+        
+        return send_email(subject, content)
+        
+    except Exception as e:
+        logger.error(f"Erreur notification: {str(e)}")
+        return False
 
 def notify_mac_duplicate_callback(duplicate_info):
-    """
-    Callback pour les notifications de doublons MAC
-    Adapte les données pour la fonction notify_mac_duplicate existante
-    
-    Args:
-        duplicate_info (dict): Infos du doublon avec clés:
-            - mac: adresse MAC en doublon
-            - addresses: liste des adresses concernées  
-            - removed_from: adresse dont la MAC a été supprimée
-            - api_url: URL de l'API phpIPAM
-    """
-    return notify_mac_duplicate(duplicate_info)
-
-def notify_error(address, hostname, ip, error_message, username="Utilisateur inconnu", edit_date="Date inconnue", action=""):
-    """
-    Envoie une notification d'erreur par email
-    VERSION CORRIGÉE : Avec le bon format de lien phpIPAM
-    """
-    subject = f"[ERREUR DNS] Problème avec l'entrée {hostname}"
-    
-    # Construire le lien phpIPAM avec le bon format
-    phpipam_base = PHPIPAM_URL.replace('/api', '').replace('http://', '').replace('https://', '')
-    phpipam_link = f"http://{phpipam_base}/subnets/3/{address.get('subnetId', 'UNKNOWN')}/address-details/{address.get('id', 'UNKNOWN')}/"
-    
-    body = f"""Bonjour,
-    
-Une erreur a été détectée lors de la création d'enregistrements DNS pour l'entrée suivante :
-
-- Hostname: {hostname}
-- Adresse IP: {ip}
-- Lien phpIPAM: {phpipam_link}
-- Dernière modification par: {username}
-- Date de modification: {edit_date}
-- Type d'action: {action}
-
-Erreur détectée:
-{error_message}
-
-Cette entrée a été supprimée ou corrigée automatiquement.
-
-ACTION RECOMMANDÉE:
-Cliquez sur le lien phpIPAM ci-dessus pour vérifier et corriger l'entrée si nécessaire.
-
-Ce message est généré automatiquement par le système PPHOOK.
-Veuillez ne pas répondre à ce message.
-"""
-    return send_email(subject, body)
+    """Callback pour doublons MAC"""
+    try:
+        removed_from = duplicate_info['removed_from']
+        addresses = duplicate_info['addresses']
+        
+        # Trouver l'adresse gardée
+        kept_address = next((addr for addr in addresses if addr['ip'] != removed_from['ip']), None)
+        
+        # Utiliser notify_error avec variables MAC spéciales pour le template
+        template = env.get_template(EMAIL_TEMPLATE_MAC_DUPLICATE)
+        content = template.render(
+            ip=removed_from['ip'],
+            hostname=removed_from.get('hostname', 'Non défini'),
+            subnet_id=removed_from.get('subnetId', 'Inconnu'),
+            address_id=removed_from.get('id', 'Inconnu'),
+            ip_target=kept_address['ip'] if kept_address else 'Inconnu',
+            hostname_target=kept_address.get('hostname', 'Non défini') if kept_address else 'Inconnu',
+            subnet_id_target=kept_address.get('subnetId', 'Inconnu') if kept_address else 'Inconnu',
+            address_id_target=kept_address.get('id', 'Inconnu') if kept_address else 'Inconnu',
+            duplicate_mac=duplicate_info['mac'],
+            username="Système automatique",
+            edit_date=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        )
+        
+        subject = f"[DOUBLON MAC CORRIGÉ] {duplicate_info['mac']}"
+        return send_email(subject, content)
+        
+    except Exception as e:
+        logger.error(f"Erreur callback MAC: {str(e)}")
+        return False
 
 # =================================================
 #  +-----------------------------------------+
@@ -359,6 +336,31 @@ def process_address(phpipam, powerdns, address):
     if not valid:
         logger.error(f"Données invalides pour l'adresse {address.get('ip')}: {error_message}")
         notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), error_message, username, edit_date, action)
+        return False
+    
+    # Étape 1.5: Vérifier les doublons hostname
+    has_duplicate, duplicate_address = phpipam.validate_hostname_duplicate(address.get('ip'))
+    if has_duplicate:
+        error_message = f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}, Suppression de l'adresse {address.get('ip')}"
+        logger.warning(error_message)
+    
+        # Supprimer les enregistrements DNS associés à l'hostname dupliqué
+        hostname = address.get('hostname')
+        ip = address.get('ip')
+        
+        if hostname and ip:
+            logger.info(f"Suppression des enregistrements DNS pour l'hostname dupliqué {hostname} ({ip})")
+            success, error_msg = powerdns.delete_a_ptr_records(hostname, ip)
+            
+            if success:
+                logger.info(f"Enregistrements DNS supprimés avec succès pour {hostname} ({ip})")
+            else:
+                logger.error(f"Échec suppression DNS pour {hostname} ({ip}): {error_msg}")
+        
+        # Supprimer l'adresse avec doublon
+        phpipam.delete_address(address.get('ip'))
+
+        notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), error_message, username, edit_date, action, duplicate_address)
         return False
 
     # Étape 2: Récupérer la liste des zones existantes
@@ -569,46 +571,6 @@ def save_last_check_time(check_time):
     except OSError as e:
         logger.error(f"Erreur lors de l'enregistrement de la dernière vérification: {str(e)}")
 
-def ensure_timestamp_format():
-    """
-    S'assure que le fichier last_check utilise le format timestamp
-    """
-    if not os.path.exists(LAST_CHECK_FILE):
-        return
-
-    try:
-        with open(LAST_CHECK_FILE, 'r') as f:
-            content = f.read().strip()
-
-        # Vérifier si c'est déjà un timestamp
-        try:
-            float(content)
-            return  # C'est déjà un timestamp, rien à faire
-        except ValueError:
-            # Essayer de convertir en timestamp
-            date_formats = [
-                "%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%dT%H:%M:%S",
-                "%Y-%m-%d"
-            ]
-
-            for fmt in date_formats:
-                try:
-                    dt = datetime.strptime(content, fmt)
-                    # Convertir en timestamp et enregistrer
-                    with open(LAST_CHECK_FILE, 'w') as f:
-                        f.write(str(dt.timestamp()))
-                    return
-                except ValueError:
-                    continue
-
-            logger.warning(f"Impossible de convertir le contenu de last_check: {content}. Fichier réinitialisé.")
-            # Supprimer le fichier s'il n'est pas convertible
-            os.remove(LAST_CHECK_FILE)
-    except Exception as e:
-        logger.error(f"Erreur lors de la vérification du format timestamp: {str(e)}")
-
-
 # =================================================
 #  +-----------------------------------------+
 #  |           FONCTIONS PRINCIPALES         |
@@ -618,9 +580,6 @@ def ensure_timestamp_format():
 def main():
     """Fonction principale"""
     logger.info("Démarrage du script d'intégration phpIPAM-PowerDNS")
-
-    # Assurer le format timestamp pour last_check
-    ensure_timestamp_format()
 
     # Initialiser les clients API
     phpipam = ipam(PHPIPAM_URL, PHPIPAM_APP_ID, PHPIPAM_USERNAME, PHPIPAM_PASSWORD, config=CONFIG)

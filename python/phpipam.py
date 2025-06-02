@@ -244,26 +244,23 @@ class PhpIPAMAPI:
             logger.error(f"Erreur lors de la récupération de l'historique de l'adresse {address_id}: {str(e)}")
             return []
         
-    def get_addresses_with_mac_and_infra_tag(self):
+    def get_addresses_with_mac_and_dhcp_profil(self):
         """
-        Récupère toutes les adresses avec MAC non nulle et tag custom 'infra' = 1
-        VERSION CORRIGÉE
-
-        Args:
-            phpipam (PhpIPAMAPI): Instance de l'API phpIPAM
-
+        Récupère toutes les adresses avec MAC non nulle et custom_DHCP_Profil = 'infra' ou 'lise'
+    
         Returns:
-            list: Liste des adresses avec MAC et tag infra
+            list: Liste des adresses avec MAC et profil DHCP, chaque élément contient:
+                - id, ip, hostname, mac, editDate, subnetId, dhcp_profil
         """
         try:
             # Récupérer toutes les adresses
             all_addresses = self.get_addresses(include_inactive=False)
-
+        
             if not all_addresses:
                 logger.info("Aucune adresse trouvée dans phpIPAM")
                 return []
 
-            # Filtrer les adresses avec MAC non nulle et custom_infra = 1
+            # Filtrer les adresses avec MAC non nulle et custom_DHCP_Profil valide
             filtered_addresses = []
             for address in all_addresses:
                 # Vérifier si MAC n'est pas nulle
@@ -271,21 +268,21 @@ class PhpIPAMAPI:
                 if mac_value is None or mac_value == '' or str(mac_value).strip() == '':
                     continue
 
-                # Vérifier si custom_infra = 1 (conversion en string pour comparaison sûre)
-                custom_infra = address.get('custom_infra')
-                if custom_infra is None:
+                # Vérifier custom_DHCP_Profil (CHANGEMENT ICI)
+                dhcp_profil = address.get('custom_DHCP_Profil')
+                if dhcp_profil is None:
                     continue
 
-                # Conversion sûre en string pour la comparaison
+                # Conversion sûre en string et vérification des valeurs
                 try:
-                    custom_infra_str = str(custom_infra).strip()
-                    if custom_infra_str not in ['1', 'true', 'True', 'yes', 'Yes']:
+                    dhcp_profil_str = str(dhcp_profil).lower().strip()
+                    if dhcp_profil_str not in ['infra', 'lise']:
                         continue
                 except Exception as e:
-                    logger.warning(f"Erreur conversion custom_infra pour adresse {address.get('id')}: {e}")
+                    logger.warning(f"Erreur conversion custom_DHCP_Profil pour adresse {address.get('id')}: {e}")
                     continue
 
-                # Si on arrive ici, l'adresse a une MAC et custom_infra = 1
+                # Ajouter l'adresse avec toutes les infos
                 try:
                     filtered_addresses.append({
                         'id': address.get('id'),
@@ -293,17 +290,24 @@ class PhpIPAMAPI:
                         'hostname': address.get('hostname', 'Non défini'),
                         'mac': str(mac_value).lower().strip(),  # Normaliser la MAC
                         'editDate': address.get('editDate', 'Non défini'),
-                        'subnetId': address.get('subnetId')
+                        'subnetId': address.get('subnetId'),
+                        'dhcp_profil': dhcp_profil_str  # Ajouter le profil DHCP
                     })
                 except Exception as e:
                     logger.warning(f"Erreur traitement adresse {address.get('id')}: {e}")
                     continue
 
-            logger.info(f"Trouvé {len(filtered_addresses)} adresses avec MAC et tag infra")
+            logger.info(f"Trouvé {len(filtered_addresses)} adresses avec MAC et custom_DHCP_Profil (infra/lise)")
+        
+            # Statistiques par profil
+            infra_count = sum(1 for addr in filtered_addresses if addr['dhcp_profil'] == 'infra')
+            lise_count = sum(1 for addr in filtered_addresses if addr['dhcp_profil'] == 'lise')
+            logger.info(f"Répartition: {infra_count} infra, {lise_count} lise")
+        
             return filtered_addresses
 
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération des adresses MAC: {str(e)}")
+            logger.error(f"Erreur lors de la récupération des adresses DHCP: {str(e)}")
             return []
 
     def remove_mac_from_address(self, address_id):
@@ -391,7 +395,7 @@ class PhpIPAMAPI:
         
         try:
             # Récupérer les adresses avec MAC et tag infra
-            addresses_with_mac = self.get_addresses_with_mac_and_infra_tag()
+            addresses_with_mac = self.get_addresses_with_mac_and_dhcp_profil()
             
             if len(addresses_with_mac) < 2:
                 logger.info("Pas assez d'adresses avec MAC pour détecter des doublons")
@@ -464,4 +468,54 @@ class PhpIPAMAPI:
             
         except Exception as e:
             logger.error(f"Erreur lors de la validation des doublons MAC: {str(e)}")
+            return False
+          
+    def validate_hostname_duplicate(self, ip):
+        """Vérifie s'il y a des duplications d'hostname pour une IP donnée"""
+        try:
+            all_addresses = self.get_addresses(include_inactive=False)
+            target_hostname = None
+            
+            # Trouver le hostname de l'IP
+            for address in all_addresses:
+                if address.get('ip') == ip and address.get('hostname'):
+                    target_hostname = address.get('hostname').lower().strip()
+                    break
+            
+            if not target_hostname:
+                return False, None
+            
+            # Trouver la première occurrence de duplication (différente de l'IP donnée)
+            for addr in all_addresses:
+                if (addr.get('hostname', '').lower().strip() == target_hostname and 
+                    addr.get('ip') != ip):
+                    return True, addr
+            
+            return False, None
+            
+        except Exception as e:
+            logger.error(f"Erreur vérification doublons {ip}: {str(e)}")
+            return False, None
+
+    def delete_address(self, ip):
+        """Supprime une adresse IP de phpIPAM"""
+        try:
+            if not self.ensure_auth():
+                return False
+            
+            # Trouver l'ID de l'IP
+            all_addresses = self.get_addresses(include_inactive=True)
+            address_id = next((addr.get('id') for addr in all_addresses if addr.get('ip') == ip), None)
+            
+            if not address_id:
+                return False
+            
+            # Supprimer
+            url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
+            response = requests.delete(url, headers={"token": self.token})
+            
+            return response.status_code == 200 and response.json().get("success", False)
+            
+        except Exception as e:
+            logger.error(f"Erreur suppression {ip}: {str(e)}")
             return False

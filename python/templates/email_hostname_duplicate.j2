@@ -1,0 +1,22 @@
+Bonjour,
+
+Un doublon d'hostname a été détecté et corrigé.
+
+Hostname en doublon: {{ hostname }}
+
+La plus récente entrée IPAM modifiée a été supprimée.
+
+[Entrée SUPPRIMÉE]
+IP source: {{ ip }}
+Utilisateur: {{ username }}
+Date: {{ edit_date }}
+Lien phpIPAM: http://{{ ip_ipam }}/subnets/3/{{ subnet_id }}/address-details/{{ address_id }}
+
+[Entrée GARDÉE]
+IP source: {{ duplicate_address_ip }}
+Lien phpIPAM: http://{{ duplicate_address_ip }}/subnets/3/{{ duplicate_subnet_id }}/address-details/{{ duplicate_address_id }}
+
+
+Système PPHOOK - {{ timestamp }}
+Ce message a été généré automatiquement par le système PPHOOK.
+Veuillez ne pas répondre à ce message.
