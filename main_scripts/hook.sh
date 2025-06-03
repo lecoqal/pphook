@@ -98,8 +98,8 @@ cp $PROJECT_PATH/python/hook.py /opt/pphook/
 chmod +x /opt/pphook/hook.py
 
 # Copy Email Templates Directory
-mkdir /opt/pphook/templates/
-cp $PROJECT_PATH/python/templates/email*.j2 /opt/pphook/templates/
+mkdir -p /opt/pphook/templates/email/
+cp $PROJECT_PATH/python/templates/email/email*.j2 /opt/pphook/templates/
 
 # Create the directory for the last_check file
 mkdir -p /var/lib/pphook

@@ -16,7 +16,7 @@ import configparser
 from pdns import PowerDNSAPI as pdns
 from jinja2 import Environment, FileSystemLoader
 
-env = Environment(loader=FileSystemLoader("templates/"))
+env = Environment(loader=FileSystemLoader("templates/email/"))
 template = env.get_template("named.conf.local.j2")
 filename = "output/named.conf.local"
 
