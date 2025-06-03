@@ -1,0 +1,51 @@
+# Configuration DHCP - Définition des classes et subnets
+# Généré automatiquement par dhcpd_gen.py
+# Date: {{ ansible_date_time.iso8601 if ansible_date_time is defined else "Auto-generated" }}
+
+###########################################
+# DÉFINITION DES CLASSES DHCP
+###########################################
+
+{% for dhcp_class in dhcp_classes %}
+class "{{ dhcp_class.name }}" {
+    match if (
+                {{ dhcp_class.match_condition }}
+             );
+}
+
+{% endfor %}
+
+###########################################
+# DÉCLARATIONS DES SUBNETS
+###########################################
+
+{% for subnet in subnets %}
+# {{ subnet.description }}
+subnet {{ subnet.subnet }} netmask {{ subnet.netmask }} {
+    option routers {{ subnet.gateway }};
+    option subnet-mask {{ subnet.netmask }};
+    option domain-name-servers 8.8.8.8, 8.8.4.4;
+    
+    pool {
+        range {{ subnet.range_start }} {{ subnet.range_end }};
+        
+        {% if subnet.associated_classes %}
+        # Classes autorisées pour ce subnet
+        {% for class_info in subnet.associated_classes %}
+        allow members of "{{ class_info.class_name }}";
+        {% endfor %}
+        {% else %}
+        # Aucune restriction de classe pour ce subnet
+        allow unknown-clients;
+        {% endif %}
+        
+        default-lease-time 600;
+        max-lease-time 7200;
+    }
+}
+
+{% endfor %}
+
+###########################################
+# FIN DE CONFIGURATION
+###########################################

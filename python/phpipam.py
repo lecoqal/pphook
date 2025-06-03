@@ -134,7 +134,30 @@ class PhpIPAMAPI:
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des adresses: {str(e)}")
             return []
-            
+
+    def get_subnets(self):
+        """Récupère tous les subnets depuis phpIPAM"""
+        if not self.ensure_auth():
+            return []
+
+        subnets_url = f"{self.api_url}/{self.app_id}/subnets/"
+        headers = {"token": self.token}
+        
+        try:
+            response = requests.get(subnets_url, headers=headers)
+            response.raise_for_status()
+
+            data = response.json()
+            if data["success"]:
+                return data["data"]
+            else:
+                logger.error(f"Échec de récupération des subnets: {data.get('message', 'Erreur inconnue')}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des subnets: {str(e)}")
+            return []   
+  
     def get_subnet_details(self, subnet_id):
         """Récupère les détails d'un sous-réseau spécifique"""
         if not self.ensure_auth():

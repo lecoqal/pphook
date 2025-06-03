@@ -1,3 +1,4 @@
 .env
 .env.*
 python/output/*
+python/__pycache__/
