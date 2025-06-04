@@ -11,7 +11,7 @@ eval "$(gpg --quiet --decrypt ../.env.gpg 2>/dev/null | grep -E '^[A-Z_]+=.*' | 
 # DEPENDENCIES
 # ==========================================
 apt-get update
-apt-get install python3 python3-pip python3-venv -y
+apt-get install python3 python3-pip python3-venv sshpass -y
 
 # ==========================================
 # CREATE VENV

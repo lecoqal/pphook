@@ -11,7 +11,7 @@ eval "$(gpg --quiet --decrypt ../.env.gpg 2>/dev/null | grep -E '^[A-Z_]+=.*' | 
 # DEPENDENCIES
 # ==========================================
 apt-get update
-apt-get install bind9 bind9utils -y
+apt-get install bind9 bind9utils openssh-server -y
 
 # ==========================================
 # RESOLV.CONF CONFIG
@@ -56,6 +56,25 @@ options {
 EOF
 
 # ==========================================
+# CREATE USER BIND_USER
+# ==========================================
+# Create user
+useradd -m -s /bin/bash $BIND_USER
+
+# Defined password
+echo "$BIND_USER:$BIND_USER_PASSWORD" | chpasswd
+
+#Add to sudoers
+export PATH=$PATH:/usr/sbin:/sbin
+usermod -aG sudo $BIND_USER
+
+# Give perms on /etc/bind
+chown -R $BIND_USER:$BIND_USER /etc/bind
+chmod -R 775 /etc/bind
+
+echo "User $BIND_USER created with perms on /etc/bind"
+
+# ==========================================
 # TSIG KEY
 # ==========================================
 touch transfer.key
@@ -68,25 +87,11 @@ EOF
 
 # Secure permissions
 chmod 640 /etc/bind/transfer.key
-chown bind:bind /etc/bind/transfer.key
-
-# ==========================================
-# CREATE USER MGMT_BIND
-# ==========================================
-# Create user
-useradd -m -s /bin/bash mgmt_bind
-
-# Defined password
-echo "mgmt_bind:$MGMT_BIND_PASS" | chpasswd
-
-# Give perms on /etc/bind
-chown -R mgmt_bind:mgmt_bind /etc/bind
-chmod -R 775 /etc/bind
-
-echo "User mgmt_bind created with perms on /etc/bind"
+chown $BIND_USER:$BIND_USER /etc/bind/transfer.key
 
 # ==========================================
 # START BIND
 # ==========================================
 systemctl restart bind9
+systemctl restart ssh
 systemctl status bind9

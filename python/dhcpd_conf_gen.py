@@ -2,12 +2,7 @@
 import sys
 import os
 import subprocess
-import requests
-import time
 import logging
-import ipaddress
-import json
-import configparser
 from phpipam import PhpIPAMAPI as ipam
 from jinja2 import Environment, FileSystemLoader
 
