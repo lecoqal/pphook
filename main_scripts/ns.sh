@@ -77,17 +77,16 @@ echo "User $BIND_USER created with perms on /etc/bind"
 # ==========================================
 # TSIG KEY
 # ==========================================
-touch transfer.key
-cat <<EOF >/etc/bind/transfer.key
-key "transfer.key" {
-    algorithm hmac-sha256;
-    secret "$TSIG_KEY";
-};
-EOF
+#cat <<EOF >/etc/bind/transfer.key
+#key "transfer.key" {
+#    algorithm hmac-sha256;
+#    secret "$TSIG_KEY";
+#};
+#EOF
 
 # Secure permissions
-chmod 640 /etc/bind/transfer.key
-chown $BIND_USER:$BIND_USER /etc/bind/transfer.key
+#chmod 640 /etc/bind/transfer.key
+#chown $BIND_USER:$BIND_USER /etc/bind/transfer.key
 
 # ==========================================
 # START BIND

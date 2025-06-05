@@ -1,5 +1,3 @@
-include "/etc/bind/transfer.key";
-
 {% for zone in zones %}
 {%- if not zone.endswith('.in-addr.arpa') %}
 // Foward zone {{ zone }} - Transfer from PowerDNS master

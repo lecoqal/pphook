@@ -28,8 +28,8 @@ mysql -u $PDNS_DB_USER -h $DB_IP -p$PDNS_DB_PASS $PDNS_DB_NAME < /usr/share/pdns
 # ==========================================
 # TSIG KEY GENERATION
 # ==========================================
-pdnsutil generate-tsig-key transfer.key hmac-sha256    # Generate a TSIG key
-TSIG_KEY = $(pdnsutil list-tsig-keys)                  # Retrieve the key into a variable
+#pdnsutil generate-tsig-key transfer.key hmac-sha256    # Generate a TSIG key
+#TSIG_KEY = $(pdnsutil list-tsig-keys)                  # Retrieve the key into a variable
 
 # ==========================================
 # POWERDNS CONFIGURATION
@@ -55,9 +55,6 @@ gmysql-dnssec=yes
 gmysql-socket=                          # Important parameter to force TCP connection
 
 # TSIG key
-tsig-1-key=$TSIG_KEY
-tsig-1-name=transfer.key
-tsig-1-algorithm=hmac-sha256
 
 # Security
 allow-notify-from=$NS01_IP,$NS02_IP   # Allow notifications from slaves
