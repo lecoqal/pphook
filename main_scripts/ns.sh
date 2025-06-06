@@ -30,28 +30,55 @@ EOF
 cat <<EOF >/etc/bind/named.conf.options
 options {
     directory "/var/cache/bind";
-    
-    // Listen on all interfaces
-    listen-on { any; };
-    listen-on-v6 { any; };
-    
-    // Allow recursive queries
-    allow-recursion { any; };
-    recursion yes;
-    
-    // Zone transfers
-    allow-transfer { none; };  // Disable transfers to other servers
-    
-    // Notifications
-    allow-notify { $PDNS_IP; };
-    
-    // Miscellaneous
-    notify no;                // Don't send notifications (slave only)
-    minimal-responses yes;
-    
-    // Logging
+
+    // Pour un slave, désactiver la récursion (sécurité)
+    recursion no;
+
+    // Autoriser les requêtes
+    allow-query { any; };
+
+    // Pas de récursion pour les slaves
+    allow-recursion { none; };
+
+    // Interdire les transferts
+    allow-transfer { none; };
+
+    // Accepter les notifications uniquement du maître
+    allow-notify { $PDNS_IP; };  // IP PowerDNS master
+
+    // Configuration DNSSEC
     dnssec-validation auto;
+
+    // Restrictions
     auth-nxdomain no;
+    listen-on-v6 { none; };
+
+    // Écouter sur toutes les interfaces
+    listen-on { any; };
+
+    // Désactiver la version (sécurité)
+    version none;
+
+    // Logs de requêtes (optionnel)
+    // querylog yes;
+};
+
+logging {
+    channel default_debug {
+        file "/var/log/bind/bind.log";
+        severity dynamic;
+    };
+
+    channel query_log {
+        file "/var/log/bind/query.log";
+        severity info;
+        print-category yes;
+        print-severity yes;
+        print-time yes;
+    };
+
+    category default { default_debug; };
+    category queries { query_log; };
 };
 EOF
 
