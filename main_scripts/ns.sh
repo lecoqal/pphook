@@ -58,27 +58,6 @@ options {
 
     // Désactiver la version (sécurité)
     version none;
-
-    // Logs de requêtes (optionnel)
-    // querylog yes;
-};
-
-logging {
-    channel default_debug {
-        file "/var/log/bind/bind.log";
-        severity dynamic;
-    };
-
-    channel query_log {
-        file "/var/log/bind/query.log";
-        severity info;
-        print-category yes;
-        print-severity yes;
-        print-time yes;
-    };
-
-    category default { default_debug; };
-    category queries { query_log; };
 };
 EOF
 
