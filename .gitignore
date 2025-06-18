@@ -2,3 +2,4 @@
 .env.*
 python/output/*
 python/__pycache__/
+.bkp
