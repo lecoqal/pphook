@@ -13,12 +13,12 @@ read DUMP_PATH
 echo "pdns ou ipam : "
 read REP
 
-if [$REP == "pdns"]
+if [ "$REP" == "pdns" ]
 then
 mysql -u $PDNS_DB_USER -p$PDNS_DB_PASS -h $DB_IP $PDNS_DB_NAME < $DUMP_PATH
 fi
 
-if [$REP == "ipam"]
+if [ "$REP" == "ipam" ]
 then
 mysql -u $IPAM_DB_USER -p$IPAM_DB_PASS -h $DB_IP $IPAM_DB_NAME < $DUMP_PATH
 fi
