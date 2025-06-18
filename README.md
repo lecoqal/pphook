@@ -87,7 +87,7 @@ Unless otherwise required, you only need to edit this file.
 - **Domain Validation**: Hostname must belong to an existing DNS zone
 - **IP Address**: Must be a valid IPv4/IPv6 address
 - **Record Consistency**: A and PTR records must correspond
-- **MAC Uniqueness**: No duplicate MAC Adress
+- **MAC Uniqueness**: No duplicate MAC Address
 
 ### Error Handling
 
