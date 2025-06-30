@@ -15,16 +15,16 @@ SERIAL=$(date +%Y%m%d%H)
 echo "Création zone $ZONE"
 
 pdnsutil create-zone "$ZONE"
-pdnsutil change-zone-type "$ZONE" MASTER
+pdnsutil set-kind "$ZONE" MASTER
 
 # SOA
 pdnsutil replace-rrset "$ZONE" '' SOA 3600 "ns.$ZONE. admin.$ZONE. $SERIAL 10800 3600 604800 3600"
 
 # NS
-pdnsutil replace-rrset "$ZONE" '' NS 3600 "ns.$ZONE."
+pdnsutil replace-rrset "$ZONE" '' NS 3600 "$ZONE."
 
 # A du NS
-pdnsutil replace-rrset "$ZONE" "ns" A 3600 "$NS_IP"
+pdnsutil replace-rrset "$ZONE" '' A 3600 "$NS_IP"
 
 # === ZONE INVERSE ===
 IFS='.' read -ra IP <<< "$NS_IP"
@@ -33,12 +33,12 @@ REVERSE_ZONE="${IP[2]}.${IP[1]}.${IP[0]}.in-addr.arpa"
 echo "Création zone inverse $REVERSE_ZONE"
 
 pdnsutil create-zone "$REVERSE_ZONE"
-pdnsutil change-zone-type "$REVERSE_ZONE" MASTER
+pdnsutil set-kind "$REVERSE_ZONE" MASTER
 
 # SOA inverse
-pdnsutil replace-rrset "$REVERSE_ZONE" '' SOA 3600 "ns.$ZONE. admin.$ZONE. $SERIAL 10800 3600 604800 3600"
+pdnsutil replace-rrset "$REVERSE_ZONE" '' SOA 3600 "ns.$REVERSE_ZONE. admin.$REVERSE_ZONE. $SERIAL 10800 3600 604800 3600"
 
 # NS inverse
-pdnsutil replace-rrset "$REVERSE_ZONE" '' NS 3600 "ns.$ZONE."
+pdnsutil replace-rrset "$REVERSE_ZONE" '' NS 3600 "$REVERSE_ZONE."
 
 echo "Terminé : $ZONE et $REVERSE_ZONE"
