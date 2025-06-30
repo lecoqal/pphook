@@ -38,26 +38,28 @@ mysql -u $PDNS_DB_USER -h $DB_IP -p$PDNS_DB_PASS $PDNS_DB_NAME -e "ALTER TABLE r
 
 cat <<EOF >/etc/powerdns/pdns.conf
 # General parameters
-allow-axfr-ips=$NS01_IP,$NS02_IP      # IP addresses of both BIND9 slaves
-master=yes                              # Master mode
-disable-axfr-rectify=no                 # Enable auto updates of zones after modifications
-daemon=yes                              # Daemon mode
-guardian=yes                            # Protection against crashes
+master=yes                             # Master mode
+slave=no                               # Explicitly disable slave mode
+disable-axfr-rectify=no                # Enable auto updates of zones after modifications
+daemon=yes                             # Daemon mode
+guardian=yes                           # Protection against crashes
 local-address=0.0.0.0
 
 # Database configuration
-launch=gmysql                           # Use MySQL backend
+launch=gmysql                          # Use MySQL backend
 gmysql-host=$DB_IP
 gmysql-user=$PDNS_DB_USER
 gmysql-password=$PDNS_DB_PASS
 gmysql-dbname=$PDNS_DB_NAME
 gmysql-port=$DB_PORT
 gmysql-dnssec=yes
-gmysql-socket=                          # Important parameter to force TCP connection
+gmysql-socket=                         # Important parameter to force TCP connection
 
-# TSIG key
+# Serial auto-increment
+default-soa-edit=INCREMENT-WEEKS       # Auto-increment serial on changes
 
 # Security
+allow-axfr-ips=$NS01_IP,$NS02_IP      # IP addresses of both BIND9 slaves
 allow-notify-from=$NS01_IP,$NS02_IP   # Allow notifications from slaves
 trusted-notification-proxy=$NS01_IP,$NS02_IP
 
@@ -65,15 +67,16 @@ trusted-notification-proxy=$NS01_IP,$NS02_IP
 loglevel=4                             # Log detail level (0-9)
 log-dns-queries=yes                    # Log queries
 
-# Communication with slaves
-slave-cycle-interval=60                # Notification check interval
+# Communication with slaves 
+slave-cycle-interval=30                # Check slaves every 30 seconds
+also-notify=$NS01_IP:53,$NS02_IP:53  # Notify BOTH slaves
 
-# AXFR parameter
-only-notify=$NS01_IP,$NS02_IP        # Send notifications only to authorized slaves
+# AXFR parameters
+# BEWARE => only-notify conflicts with also-notify
 
 # Cache poisoning protection
 reuseport=yes
-any-to-tcp=yes        # Force ANY queries to TCP (harder to spoof)
+any-to-tcp=yes                         # Force ANY queries to TCP (harder to spoof)
 
 # REST API
 api=yes
@@ -81,7 +84,7 @@ api-key=$PDNS_API_KEY
 webserver=yes
 webserver-address=0.0.0.0
 webserver-port=$PDNS_PORT
-webserver-allow-from=127.0.0.1,$HOOK_IP/32,$PDNS_IP/32
+webserver-allow-from=127.0.0.1,$ANSIBLE_IP/32,$PDNS_IP/32
 EOF
 
 # ==========================================
