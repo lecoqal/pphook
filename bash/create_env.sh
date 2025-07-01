@@ -15,3 +15,15 @@ gpg --symmetric --cipher-algo AES256 --output .env.gpg .env
 # Supprimer le fichier en clair
 rm .env
 rm global_vars.sh
+
+echo "Souhaitez-vous créer un fichier de passphrase? o/N"
+read response
+
+if [ $response = "o" ]
+then
+    echo "Entrez à nouveau votre mot de passe"
+    read mdp
+    echo "$mdp" > .gpg_passphrase
+    chmod 600 .gpg_passphrase
+fi
+
