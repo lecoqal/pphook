@@ -23,7 +23,7 @@ filename_resa = "output/dhcpd_resa.conf"
 
 def load_bash_vars(env_file_path="../.env.gpg"):
     """Charge les variables depuis un fichier .env chiffré"""
-    command = f'gpg --quiet --decrypt {env_file_path} 2>/dev/null | grep -E "^[A-Z_]+=" '
+    command = f'gpg --batch --passphrase-file ../.gpg_passphrase --quiet --decrypt {env_file_path} 2>/dev/null | grep -E "^[A-Z_]+=" '
     result = subprocess.run(command, shell=True, capture_output=True, text=True, executable='/bin/bash')
     
     if result.returncode != 0:
@@ -86,3 +86,4 @@ content_resa = template_resa.render(
 os.makedirs("output", exist_ok=True)
 with open(filename_resa, mode="w", encoding="utf-8") as output:
     output.write(content_resa)
+print("Génération du fichier dhcpd.conf terminé!")

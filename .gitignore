@@ -2,4 +2,6 @@
 .env.*
 python/output/*
 python/__pycache__/
-.bkp
+*.bkp
+.gpg_passphrase
+global_vars.sh

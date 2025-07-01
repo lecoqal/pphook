@@ -26,11 +26,11 @@ echo "$DHCP_USER:$DHCP_USER_PASSWORD" | chpasswd
 export PATH=$PATH:/usr/sbin:/sbin
 usermod -aG sudo $DHCP_USER
 
-# Give perms on /etc/bind
-chown -R $DHCP_USER:$DHCP_USER /etc/bind
-chmod -R 775 /etc/bind
+# Give perms on /etc/dhcp/
+chown -R $DHCP_USER:$DHCP_USER /etc/dhcp
+chmod -R 775 /etc/dhcp
 
-echo "User $DHCP_USER created with perms on /etc/bind"
+echo "User $DHCP_USER created with perms on /etc/dhcp"
 
 # ==========================================
 # START SERVICE

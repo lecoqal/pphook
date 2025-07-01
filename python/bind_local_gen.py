@@ -23,8 +23,7 @@ filename = "output/named.conf.local"
 
 def load_bash_vars(env_file_path="../.env.gpg"):
     """Charge les variables depuis un fichier .env chiffré"""
-    command = f'gpg --quiet --decrypt {env_file_path} 2>/dev/null | grep -E "^[A-Z_]+=" '
-
+    command = f'gpg --batch --passphrase-file ../.gpg_passphrase --quiet --decrypt {env_file_path} 2>/dev/null | grep -E "^[A-Z_]+=" '
     result = subprocess.run(command, shell=True, capture_output=True, text=True, executable='/bin/bash')
 
     if result.returncode != 0:
