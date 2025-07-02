@@ -118,7 +118,6 @@ SMTP_USERNAME = CONFIG.get('email', 'username', fallback=None)
 SMTP_PASSWORD = CONFIG.get('email', 'password', fallback=None)
 SMTP_USE_TLS = CONFIG.getboolean('email', 'use_tls', fallback=False)
 EMAIL_FROM = CONFIG.get('email', 'from')
-EMAIL_TO = CONFIG.get('email', 'to')
 
 # Configuration des vérifications
 HOSTNAME_PATTERN = re.compile(CONFIG.get('validation', 'hostname_pattern'))
@@ -179,11 +178,8 @@ def validate_subnet_ip(ip, subnet):
 #  +-----------------------------------------+
 # =================================================
 
-def send_email(subject, body_content, recipient=None):
-    """Envoie un email simple"""
-    if recipient is None:
-        recipient = EMAIL_TO
-
+def send_email(subject, body_content, recipient):
+    """Envoie un email simple - recipient obligatoire"""
     msg = MIMEMultipart()
     msg['From'] = EMAIL_FROM
     msg['To'] = recipient
@@ -209,9 +205,13 @@ def send_email(subject, body_content, recipient=None):
         return False
 
 def notify_error(address, hostname, ip, error_message, username="Utilisateur inconnu", 
-                edit_date="Date inconnue", action="", duplicate_address=None, duplicate_mac=None):
-    """Notification d'erreur universelle avec templates conditionnels"""
+                edit_date="Date inconnue", action="", duplicate_address=None, duplicate_mac=None, user_email=None):
+    """Notification d'erreur universelle - user_email obligatoire"""
     try:
+        if not user_email:
+            logger.error(f"Pas d'email utilisateur pour notifier l'erreur: {error_message}")
+            return False
+            
         # Déterminer template et sujet
         if duplicate_address:
             template_name = EMAIL_TEMPLATE_HOSTNAME_DUPLICATE
@@ -251,22 +251,32 @@ def notify_error(address, hostname, ip, error_message, username="Utilisateur inc
         template = env.get_template(template_name)
         content = template.render(**template_vars)
         
-        return send_email(subject, content)
+        return send_email(subject, content, user_email)
         
     except Exception as e:
         logger.error(f"Erreur notification: {str(e)}")
         return False
 
 def notify_mac_duplicate_callback(duplicate_info):
-    """Callback pour doublons MAC"""
+    """Callback pour doublons MAC avec email de l'utilisateur responsable"""
     try:
         removed_from = duplicate_info['removed_from']
         addresses = duplicate_info['addresses']
         
+        # Récupérer l'email de l'utilisateur responsable de l'adresse supprimée
+        phpipam = ipam(PHPIPAM_URL, PHPIPAM_APP_ID, PHPIPAM_USERNAME, PHPIPAM_PASSWORD, config=CONFIG)
+        phpipam.authenticate()
+        
+        user_email, username = phpipam.get_user_email_from_changelog(removed_from['id'])
+        
+        if not user_email:
+            logger.error(f"Impossible de récupérer l'email pour le doublon MAC {duplicate_info['mac']}")
+            return False
+        
         # Trouver l'adresse gardée
         kept_address = next((addr for addr in addresses if addr['ip'] != removed_from['ip']), None)
         
-        # Utiliser notify_error avec variables MAC spéciales pour le template
+        # Utiliser le template MAC
         template = env.get_template(EMAIL_TEMPLATE_MAC_DUPLICATE)
         content = template.render(
             ip=removed_from['ip'],
@@ -278,13 +288,13 @@ def notify_mac_duplicate_callback(duplicate_info):
             subnet_id_target=kept_address.get('subnetId', 'Inconnu') if kept_address else 'Inconnu',
             address_id_target=kept_address.get('id', 'Inconnu') if kept_address else 'Inconnu',
             duplicate_mac=duplicate_info['mac'],
-            username="Système automatique",
+            username=username,
             edit_date=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         )
         
         subject = f"[DOUBLON MAC CORRIGÉ] {duplicate_info['mac']}"
-        return send_email(subject, content)
+        return send_email(subject, content, user_email)
         
     except Exception as e:
         logger.error(f"Erreur callback MAC: {str(e)}")
@@ -299,43 +309,41 @@ def notify_mac_duplicate_callback(duplicate_info):
 def process_address(phpipam, powerdns, address):
     """
     Fonction principale de traitement d'une adresse
-    Avec validation stricte du hostname par rapport aux zones existantes
-
-    Args:
-        phpipam (PhpIPAMAPI): Instance de l'API phpIPAM
-        powerdns (PowerDNSAPI): Instance de l'API PowerDNS
-        address (dict): Dictionnaire contenant les informations de l'adresse
-
-    Returns:
-        bool: True si le traitement a réussi, False sinon
+    Avec email obligatoire pour toutes les notifications
     """
     logger.info(f"Traitement de l'adresse IP {address.get('ip')} ({address.get('hostname')})")
 
-    # Récupérer les informations sur l'utilisateur ayant effectué le dernier changement
-    username = "Utilisateur inconnu"
+    # Récupérer les informations utilisateur depuis le changelog
+    user_email, username = phpipam.get_user_email_from_changelog(address.get('id'))
+    
+    if not user_email:
+        logger.error(f"Impossible de récupérer l'email utilisateur pour l'adresse {address.get('id')} - Arrêt du traitement")
+        return False
+    
+    # Fallback si pas de username
+    if not username:
+        username = "Utilisateur inconnu"
+    
+    # Récupérer autres infos du changelog
     edit_date = "Date inconnue"
     action = "Action inconnue"
-
+    
     if 'id' in address:
         try:
-            # Récupérer l'historique de cette adresse
             changelog = phpipam.get_address_changelog(address['id'])
-
             if changelog and len(changelog) > 0:
-                # Trouver la dernière entrée de modification
-                last_change = changelog[0] # LIFO
-                username = last_change.get('user', username)  #  Récupérer l'utilisateur ayant effectué la dernière modif
-                edit_date = last_change.get('date', 'Date inconnue')  # Récupérer la date de modification
-                action = last_change.get('action', 'Action inconnue')  # Récupérer le type d'action
-
+                last_change = changelog[0]
+                edit_date = last_change.get('date', 'Date inconnue')
+                action = last_change.get('action', 'Action inconnue')
         except Exception as e:
-            logger.warning(f"Impossible de récupérer les informations de changelog pour l'adresse {address.get('id')}: {str(e)}")
+            logger.warning(f"Impossible de récupérer le changelog pour l'adresse {address.get('id')}: {str(e)}")
 
     # Étape 1: Valider les données d'entrée
     valid, error_message = validate_address_data(address)
     if not valid:
         logger.error(f"Données invalides pour l'adresse {address.get('ip')}: {error_message}")
-        notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), error_message, username, edit_date, action)
+        notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
+                    error_message, username, edit_date, action, user_email=user_email)
         return False
     
     # Étape 1.5: Vérifier les doublons hostname
@@ -348,29 +356,22 @@ def process_address(phpipam, powerdns, address):
         duplicate_edit_date = None
         changelog_duplicate = phpipam.get_address_changelog(duplicate_address['id'])
         if changelog_duplicate and len(changelog_duplicate) > 0:
-            last_change_duplicate = changelog_duplicate[0]  # LIFO
+            last_change_duplicate = changelog_duplicate[0]
             duplicate_edit_date = last_change_duplicate.get('date', 'Date inconnue')
-        
-        # Log des dates avant comparaison
-        logger.info(f"IP courante: {address.get('ip')} - edit_date: {edit_date}")
-        logger.info(f"IP dupliquée: {duplicate_address.get('ip')} - duplicate_edit_date: {duplicate_edit_date}")
         
         # Déterminer quelle adresse supprimer (la plus récente)
         address_to_delete = None
         
         if edit_date and duplicate_edit_date:
-            # Comparer les dates (format supposé ISO ou timestamp)
             if edit_date > duplicate_edit_date:
                 address_to_delete = address
             else:
                 address_to_delete = duplicate_address
-            
-            logger.info(f"Suppression de l'adresse (plus récente): {address_to_delete.get('ip')}")
         else:
             logger.error("Impossible de déterminer quelle adresse supprimer")
             notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
                         f"{error_message} - Impossible de déterminer quelle adresse supprimer (dates manquantes)", 
-                        username, edit_date, action, duplicate_address)
+                        username, edit_date, action, duplicate_address, user_email=user_email)
             return False
         
         # Supprimer les enregistrements DNS de l'adresse à supprimer
@@ -380,23 +381,15 @@ def process_address(phpipam, powerdns, address):
         if hostname_to_delete and ip_to_delete:
             logger.info(f"Suppression des enregistrements DNS pour l'hostname dupliqué {hostname_to_delete} ({ip_to_delete})")
             success, error_msg = powerdns.delete_a_ptr_records(hostname_to_delete, ip_to_delete)
-            
-            if success:
-                logger.info(f"Enregistrements DNS supprimés avec succès pour {hostname_to_delete} ({ip_to_delete})")
-            else:
-                logger.error(f"Échec suppression DNS pour {hostname_to_delete} ({ip_to_delete}): {error_msg}")
         
         # Supprimer l'adresse déterminée comme étant à supprimer
         phpipam.delete_address(ip_to_delete)
         
         # Si c'est l'adresse courante qui est supprimée, on notifie et on retourne False
         if address_to_delete == address:
-            notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), error_message, username, edit_date, action, duplicate_address)
+            notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
+                        error_message, username, edit_date, action, duplicate_address, user_email=user_email)
             return False
-        else:
-            # Si c'est l'adresse dupliquée qui est supprimée, on continue le traitement
-            logger.info(f"Adresse dupliquée supprimée, poursuite du traitement de l'adresse courante {address.get('ip')}")
-            # On peut continuer le traitement normal de l'adresse courante
 
     # Étape 2: Récupérer la liste des zones existantes
     existing_zones = powerdns.get_existing_zones()
@@ -421,7 +414,6 @@ def process_address(phpipam, powerdns, address):
         a_records_found = []
         for zone in existing_zones:
             zone_with_dot = f"{zone}."
-            # Vérifier s'il y a un enregistrement A pour ce hostname dans cette zone
             if powerdns.ensure_zone_exists(zone_with_dot):
                 a_record = powerdns.get_record(zone_with_dot, f"{hostname}.", "A")
                 if a_record:
@@ -435,21 +427,21 @@ def process_address(phpipam, powerdns, address):
             logger.info(f"Suppression du PTR invalide pour {ip}")
             if not powerdns.delete_record(reverse_zone, ptr_name, "PTR"):
                 cleanup_success = False
-                logger.error(f"Échec de la suppression du PTR pour {ip}")
 
         # Supprimer les enregistrements A trouvés
         for zone, record_name in a_records_found:
             logger.info(f"Suppression de l'enregistrement A invalide {record_name} dans la zone {zone}")
             if not powerdns.delete_record(zone, record_name, "A"):
                 cleanup_success = False
-                logger.error(f"Échec de la suppression de l'enregistrement A {record_name} dans la zone {zone}")
-            else:
-                notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), error, username, edit_date, action)
+        
+        # Notifier avec l'email utilisateur
+        notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
+                    error, username, edit_date, action, user_email=user_email)
 
         return cleanup_success
 
     # Si le hostname est valide, continuer avec le traitement normal
-    fqdn = hostname  # Le hostname est déjà au format FQDN
+    fqdn = hostname
 
     # Étape 4: Vérifier l'état des enregistrements DNS actuels
     dns_status = powerdns.check_dns_records_status(fqdn, address.get('ip'))
@@ -475,16 +467,17 @@ def process_address(phpipam, powerdns, address):
         success, corrected, error_msg = powerdns.verify_record_consistency(
             fqdn, 
             address.get('ip'), 
-            error_callback=lambda msg: notify_error(address, hostname, address.get('ip'), msg, username, edit_date, action)
+            error_callback=lambda msg: notify_error(address, hostname, address.get('ip'), msg, 
+                                                   username, edit_date, action, user_email=user_email)
         )
         
         if not success:
-            # L'erreur a déjà été notifiée via le callback dans verify_record_consistency
             result = False
         else:
             if corrected:
-                # Notifier de la correction effectuée
-                notify_error(address, hostname, address.get('ip'), "Enregistrements DNS incohérents corrigés automatiquement", username, edit_date, action)
+                notify_error(address, hostname, address.get('ip'), 
+                           "Enregistrements DNS incohérents corrigés automatiquement", 
+                           username, edit_date, action, user_email=user_email)
             result = True
 
     else:

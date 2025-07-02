@@ -542,3 +542,36 @@ class PhpIPAMAPI:
         except Exception as e:
             logger.error(f"Erreur suppression {ip}: {str(e)}")
             return False
+    
+    def get_all_users(self):
+        """Récupère tous les utilisateurs"""
+        if not self.ensure_auth():
+            return []
+        
+        try:
+            response = requests.get(f"{self.api_url}/{self.app_id}/user/all/", headers={"token": self.token})
+            return response.json()["data"]
+        except:
+            return []
+
+    def get_user_email_from_changelog(self, address_id):
+        """
+        Récupère l'email de l'utilisateur depuis le changelog
+        Returns: (email, real_name) ou (None, None)
+        """
+        try:
+            # Récupérer changelog
+            changelog = self.get_address_changelog(address_id)
+            real_name = changelog[0]["user"]
+            
+            # Récupérer tous les users
+            users = self.get_all_users()
+            
+            # Trouver l'email
+            for user in users:
+                if user["real_name"] == real_name:
+                    return user["email"], real_name
+            
+            return None, real_name
+        except:
+            return None, None
