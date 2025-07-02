@@ -12,7 +12,7 @@ eval "$(gpg --quiet --decrypt ../.env.gpg 2>/dev/null | grep -E '^[A-Z_]+=.*' | 
 # Tables phpIPAM essentielles pour migration
 PHPIPAM_TABLES="sections subnets ipaddresses vlans vlanDomains devices deviceTypes users userGroups customers locations"
 
-# Tables PowerDNS essentielles  
+# Tables PowerDNS essentielles
 POWERDNS_TABLES="domains records domain_metadata"
 
 # ==========================================
@@ -21,15 +21,15 @@ POWERDNS_TABLES="domains records domain_metadata"
 
 export_tables() {
     local db_name="$1"
-    local db_user="$2" 
+    local db_user="$2"
     local db_pass="$3"
     local tables="$4"
     local output_dir="$5"
-    
+
     mkdir -p "$output_dir"
-    
+
     echo "DEBUG: Connexion vers $DB_IP avec user $db_user pour base $db_name"
-    
+
     # Test de connexion d'abord
     echo "Test connexion..."
     if ! mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" --connect-timeout=10 -e "SELECT 1;" "$db_name" >/dev/null 2>&1; then
@@ -37,11 +37,11 @@ export_tables() {
         return 1
     fi
     echo "✓ Connexion OK"
-    
+
     for table in $tables; do
         echo "Export: $table"
         echo "DEBUG: mysqldump -u $db_user -p*** -h $DB_IP --connect-timeout=10 --single-transaction $db_name $table"
-        
+
         if mysqldump -u "$db_user" -p"$db_pass" -h "$DB_IP" \
             --connect-timeout=10 \
             --single-transaction \
@@ -57,11 +57,11 @@ export_tables() {
 import_tables() {
     local db_name="$1"
     local db_user="$2"
-    local db_pass="$3" 
+    local db_pass="$3"
     local input_dir="$4"
-    
+
     echo "DEBUG: Import vers $DB_IP avec user $db_user pour base $db_name"
-    
+
     # Test de connexion d'abord
     echo "Test connexion..."
     if ! mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" --connect-timeout=10 -e "SELECT 1;" "$db_name" >/dev/null 2>&1; then
@@ -69,14 +69,14 @@ import_tables() {
         return 1
     fi
     echo "✓ Connexion OK"
-    
+
     for sql_file in "$input_dir"/*.sql; do
         [ ! -f "$sql_file" ] && continue
-        
+
         table=$(basename "$sql_file" .sql)
         echo "Import: $table"
         echo "DEBUG: mysql -u $db_user -p*** -h $DB_IP --connect-timeout=10 $db_name < $sql_file"
-        
+
         if mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" --connect-timeout=10 "$db_name" < "$sql_file" 2>/dev/null; then
             echo "✓ $table"
         else
@@ -155,3 +155,15 @@ esac
 
 echo "=== Terminé ==="
 [ "$action" = "1" ] && echo "Fichiers dans: $workdir"
+
+# Reset du timestamp SEULEMENT si on fait un import
+if [ "$action" = "2" ]; then
+    echo "Reset du timestamp pphook pour vérification complète..."
+    ssh root@$HOOK_IP "python3 -c \"
+import sys
+sys.path.insert(0, '/opt/pphook')
+from hook import reset_last_check
+reset_last_check()
+print('Timestamp reset')
+\""
+fi
