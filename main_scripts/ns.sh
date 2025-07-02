@@ -18,6 +18,7 @@ apt-get install bind9 bind9utils openssh-server -y
 # ==========================================
 cat <<EOF >/etc/resolv.conf
 nameserver 127.0.0.1
+nameserver 8.8.8.8
 options timeout:1
 options attempts:2
 options rotate
@@ -65,13 +66,13 @@ EOF
 # CREATE USER BIND_USER
 # ==========================================
 # Create user
+export PATH=$PATH:/usr/sbin:/sbin
 useradd -m -s /bin/bash $BIND_USER
 
 # Defined password
 echo "$BIND_USER:$BIND_USER_PASSWORD" | chpasswd
 
 #Add to sudoers
-export PATH=$PATH:/usr/sbin:/sbin
 usermod -aG sudo $BIND_USER
 
 # Give perms on /etc/bind

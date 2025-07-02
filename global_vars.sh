@@ -56,7 +56,7 @@ NS02_HOST=""
 NS02_IP=""
 
 # Email
-SMTP_SERVER="smtp.infra.kreizenn.bzh"
+SMTP_SERVER=""
 SMTP_PORT="25"
 EMAIL_FROM=""
 EMAIL_TO=""

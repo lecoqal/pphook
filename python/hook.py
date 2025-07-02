@@ -341,27 +341,62 @@ def process_address(phpipam, powerdns, address):
     # Étape 1.5: Vérifier les doublons hostname
     has_duplicate, duplicate_address = phpipam.validate_hostname_duplicate(address.get('ip'))
     if has_duplicate:
-        error_message = f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}, Suppression de l'adresse {address.get('ip')}"
+        error_message = f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}."
         logger.warning(error_message)
-    
-        # Supprimer les enregistrements DNS associés à l'hostname dupliqué
-        hostname = address.get('hostname')
-        ip = address.get('ip')
         
-        if hostname and ip:
-            logger.info(f"Suppression des enregistrements DNS pour l'hostname dupliqué {hostname} ({ip})")
-            success, error_msg = powerdns.delete_a_ptr_records(hostname, ip)
+        # Récupérer la date de modification de l'adresse dupliquée
+        duplicate_edit_date = None
+        changelog_duplicate = phpipam.get_address_changelog(duplicate_address['id'])
+        if changelog_duplicate and len(changelog_duplicate) > 0:
+            last_change_duplicate = changelog_duplicate[0]  # LIFO
+            duplicate_edit_date = last_change_duplicate.get('date', 'Date inconnue')
+        
+        # Log des dates avant comparaison
+        logger.info(f"IP courante: {address.get('ip')} - edit_date: {edit_date}")
+        logger.info(f"IP dupliquée: {duplicate_address.get('ip')} - duplicate_edit_date: {duplicate_edit_date}")
+        
+        # Déterminer quelle adresse supprimer (la plus récente)
+        address_to_delete = None
+        
+        if edit_date and duplicate_edit_date:
+            # Comparer les dates (format supposé ISO ou timestamp)
+            if edit_date > duplicate_edit_date:
+                address_to_delete = address
+            else:
+                address_to_delete = duplicate_address
+            
+            logger.info(f"Suppression de l'adresse (plus récente): {address_to_delete.get('ip')}")
+        else:
+            logger.error("Impossible de déterminer quelle adresse supprimer")
+            notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
+                        f"{error_message} - Impossible de déterminer quelle adresse supprimer (dates manquantes)", 
+                        username, edit_date, action, duplicate_address)
+            return False
+        
+        # Supprimer les enregistrements DNS de l'adresse à supprimer
+        hostname_to_delete = address_to_delete.get('hostname')
+        ip_to_delete = address_to_delete.get('ip')
+        
+        if hostname_to_delete and ip_to_delete:
+            logger.info(f"Suppression des enregistrements DNS pour l'hostname dupliqué {hostname_to_delete} ({ip_to_delete})")
+            success, error_msg = powerdns.delete_a_ptr_records(hostname_to_delete, ip_to_delete)
             
             if success:
-                logger.info(f"Enregistrements DNS supprimés avec succès pour {hostname} ({ip})")
+                logger.info(f"Enregistrements DNS supprimés avec succès pour {hostname_to_delete} ({ip_to_delete})")
             else:
-                logger.error(f"Échec suppression DNS pour {hostname} ({ip}): {error_msg}")
+                logger.error(f"Échec suppression DNS pour {hostname_to_delete} ({ip_to_delete}): {error_msg}")
         
-        # Supprimer l'adresse avec doublon
-        phpipam.delete_address(address.get('ip'))
-
-        notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), error_message, username, edit_date, action, duplicate_address)
-        return False
+        # Supprimer l'adresse déterminée comme étant à supprimer
+        phpipam.delete_address(ip_to_delete)
+        
+        # Si c'est l'adresse courante qui est supprimée, on notifie et on retourne False
+        if address_to_delete == address:
+            notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), error_message, username, edit_date, action, duplicate_address)
+            return False
+        else:
+            # Si c'est l'adresse dupliquée qui est supprimée, on continue le traitement
+            logger.info(f"Adresse dupliquée supprimée, poursuite du traitement de l'adresse courante {address.get('ip')}")
+            # On peut continuer le traitement normal de l'adresse courante
 
     # Étape 2: Récupérer la liste des zones existantes
     existing_zones = powerdns.get_existing_zones()

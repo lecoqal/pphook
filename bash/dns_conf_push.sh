@@ -1,11 +1,20 @@
 #!/bin/bash
 
+echo "$(date): Début script push_dns_conf"
+
 # ==========================================
 # IMPORT GLOBAL VARS
 # ==========================================
 
 # Déchiffrer et charger les variables
-eval "$(gpg --quiet --decrypt ../.env.gpg 2>/dev/null | grep -E '^[A-Z_]+=.*' | sed 's/^/export /')"
+eval "$(gpg --batch --passphrase-file ../.gpg_passphrase --quiet --decrypt ../.env.gpg 2>/dev/null | grep -E '^[A-Z_]+=.*' | sed 's/^/export /')"
+
+# ==========================================
+# EXECUTE PYTHON SCRIPT
+# ==========================================
+cd ../python/
+python3 bind_local_gen.py
+cd ../bash/
 
 # Variables
 SOURCE="../python/output/named.conf.local"
