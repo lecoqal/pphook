@@ -599,6 +599,19 @@ def save_last_check_time(check_time):
     except OSError as e:
         logger.error(f"Erreur lors de l'enregistrement de la dernière vérification: {str(e)}")
 
+def reset_last_check():
+    """Reset le timestamp last_check à 20 ans en arrière"""
+    try:
+        current_time = datetime.now()
+        new_time = current_time - timedelta(days=365 * 20)
+        
+        with open(LAST_CHECK_FILE, 'w') as f:
+            f.write(str(new_time.timestamp()))
+        
+        return True
+    except Exception:
+        return False
+
 # =================================================
 #  +-----------------------------------------+
 #  |           FONCTIONS PRINCIPALES         |
