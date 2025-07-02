@@ -4,7 +4,7 @@
 **PPHOOK** is an enterprise-grade middleware solution designed to ensure data integrity and seamless synchronization between **phpIPAM** (IP Address Management) and **PowerDNS** systems.
 
 **Version:** 2.0  
-**Author:** Lecoq Alexis  
+**Author:** Intern n°38  
 **License:** GNU General Public License v3.0  
 **Status:** Production Ready
 
