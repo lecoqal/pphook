@@ -1,8 +1,8 @@
 # PPHOOK - phpIPAM/PowerDNS Hook - Integration Middleware
 
-**Version:** 2.0
-**Author:** Intern n°38
-**License:** GNU General Public License v3.0
+**Version:** 2.0  
+**Author:** Intern n°38  
+**License:** GNU General Public License v3.0  
 **Status:** Production Ready
 
 ## Table of Contents
