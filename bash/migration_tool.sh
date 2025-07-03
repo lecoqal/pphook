@@ -1,9 +1,26 @@
 #!/bin/bash
 
 # ==========================================
+# MENU PRINCIPAL
+# ==========================================
+
+echo "=== Outil de migration phpIPAM/PowerDNS ==="
+echo "1) Export"
+echo "2) Import"
+read -p "Choix: " action
+
+echo ""
+echo "Système:"
+echo "1) phpIPAM"
+echo "2) PowerDNS"
+echo "3) Les deux"
+read -p "Choix: " system
+
+# ==========================================
 # CHOIX DU MODE DE CONFIGURATION
 # ==========================================
 
+echo ""
 echo "=== Configuration des variables ==="
 echo "1) Variables automatiques (déchiffrement .env.gpg)"
 echo "2) Variables manuelles"
@@ -13,6 +30,17 @@ if [ "$config_mode" = "1" ]; then
     echo "Déchiffrement des variables..."
     eval "$(gpg --quiet --decrypt ../.env.gpg 2>/dev/null | grep -E '^[A-Z_]+=.*' | sed 's/^/export /')"
     echo "✓ Variables chargées depuis .env.gpg"
+    
+    # Choix local/distant seulement en mode automatique
+    echo ""
+    echo "=== Choix de la base ==="
+    echo "1) Base locale (utilise DB_IP=$DB_IP)"
+    echo "2) Base distante"
+    read -p "Choix: " db_location
+    
+    if [ "$db_location" = "2" ]; then
+        read -p "Adresse IP distante: " DB_IP
+    fi
 else
     echo ""
     echo "=== Saisie manuelle des variables ==="
@@ -33,13 +61,19 @@ else
     read -s -p "Mot de passe: " PDNS_DB_PASS
     echo ""
     
-    echo ""
-    echo "Hook (pour reset timestamp):"
-    read -p "IP serveur Hook: " HOOK_IP
-    read -p "Utilisateur SSH Hook: " HOOK_USER
+    # Variables Hook seulement si Import
+    if [ "$action" = "2" ]; then
+        echo ""
+        echo "Hook (pour reset timestamp):"
+        read -p "IP serveur Hook: " HOOK_IP
+        read -p "Utilisateur SSH Hook: " HOOK_USER
+    fi
     
     echo "✓ Variables configurées manuellement"
 fi
+
+echo ""
+echo "INFO: Utilisation de DB_IP=$DB_IP"
 
 # ==========================================
 # CONFIGURATION TABLES
@@ -124,21 +158,9 @@ import_tables() {
 # MENU PRINCIPAL
 # ==========================================
 
-echo ""
-echo "=== Outil de migration phpIPAM/PowerDNS ==="
-echo "1) Export"
-echo "2) Import"
-read -p "Choix: " action
-
-echo ""
-echo "Système:"
-echo "1) phpIPAM"
-echo "2) PowerDNS"
-echo "3) Les deux"
-read -p "Choix: " system
-
-echo ""
-echo "INFO: Utilisation de DB_IP=$DB_IP"
+# ==========================================
+# RÉPERTOIRE DE TRAVAIL
+# ==========================================
 
 # Répertoire de travail
 if [ "$action" = "1" ]; then
