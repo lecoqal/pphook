@@ -1,6 +1,14 @@
 #!/bin/bash
 
 # ==========================================
+# COULEURS
+# ==========================================
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# ==========================================
 # MENU PRINCIPAL
 # ==========================================
 
@@ -29,18 +37,7 @@ read -p "Choix: " config_mode
 if [ "$config_mode" = "1" ]; then
     echo "Déchiffrement des variables..."
     eval "$(gpg --quiet --decrypt ../.env.gpg 2>/dev/null | grep -E '^[A-Z_]+=.*' | sed 's/^/export /')"
-    echo "✓ Variables chargées depuis .env.gpg"
-    
-    # Choix local/distant seulement en mode automatique
-    echo ""
-    echo "=== Choix de la base ==="
-    echo "1) Base locale (utilise DB_IP=$DB_IP)"
-    echo "2) Base distante"
-    read -p "Choix: " db_location
-    
-    if [ "$db_location" = "2" ]; then
-        read -p "Adresse IP distante: " DB_IP
-    fi
+    echo -e "${GREEN}[SUCCESS]${NC} Variables chargées depuis .env.gpg"
 else
     echo ""
     echo "=== Saisie manuelle des variables ==="
@@ -69,7 +66,7 @@ else
         read -p "Utilisateur SSH Hook: " HOOK_USER
     fi
     
-    echo "✓ Variables configurées manuellement"
+    echo -e "${GREEN}[SUCCESS]${NC} Variables configurées manuellement"
 fi
 
 echo ""
@@ -103,10 +100,10 @@ export_tables() {
     # Test de connexion d'abord
     echo "Test connexion..."
     if ! mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" --connect-timeout=10 -e "SELECT 1;" "$db_name" ; then
-        echo "✗ Connexion échouée vers $DB_IP"
+        echo -e "${RED}[ERROR]${NC} Connexion échouée vers $DB_IP"
         return 1
     fi
-    echo "✓ Connexion OK"
+    echo -e "${GREEN}[SUCCESS]${NC} Connexion OK"
     
     for table in $tables; do
         echo "Export: $table"
@@ -116,9 +113,9 @@ export_tables() {
             --single-transaction \
             --complete-insert \
             "$db_name" "$table" > "$output_dir/${table}.sql"; then
-            echo "✓ $table ($(wc -l < "$output_dir/${table}.sql") lignes)"
+            echo -e "${GREEN}[SUCCESS]${NC} $table ($(wc -l < "$output_dir/${table}.sql") lignes)"
         else
-            echo "✗ $table - Erreur export"
+            echo -e "${RED}[ERROR]${NC} $table - Erreur export"
         fi
     done
 }
@@ -134,10 +131,10 @@ import_tables() {
     # Test de connexion d'abord
     echo "Test connexion..."
     if ! mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" --connect-timeout=10 -e "SELECT 1;" "$db_name" >/dev/null 2>&1; then
-        echo "✗ Connexion échouée vers $DB_IP"
+        echo -e "${RED}[ERROR]${NC} Connexion échouée vers $DB_IP"
         return 1
     fi
-    echo "✓ Connexion OK"
+    echo -e "${GREEN}[SUCCESS]${NC} Connexion OK"
     
     for sql_file in "$input_dir"/*.sql; do
         [ ! -f "$sql_file" ] && continue
@@ -147,9 +144,9 @@ import_tables() {
         echo "DEBUG: mysql -u $db_user -p*** -h $DB_IP $db_name < $sql_file"
         
         if mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" "$db_name" < "$sql_file" 2>/dev/null; then
-            echo "✓ $table"
+            echo -e "${GREEN}[SUCCESS]${NC} $table"
         else
-            echo "✗ $table - Erreur import"
+            echo -e "${RED}[ERROR]${NC} $table - Erreur import"
         fi
     done
 }
