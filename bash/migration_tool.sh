@@ -102,7 +102,7 @@ export_tables() {
     
     # Test de connexion d'abord
     echo "Test connexion..."
-    if ! mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" --connect-timeout=10 -e "SELECT 1;" "$db_name" >/dev/null 2>&1; then
+    if ! mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" --connect-timeout=10 -e "SELECT 1;" "$db_name" ; then
         echo "✗ Connexion échouée vers $DB_IP"
         return 1
     fi
