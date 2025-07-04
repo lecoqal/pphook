@@ -77,7 +77,7 @@ echo "INFO: Utilisation de DB_IP=$DB_IP"
 # ==========================================
 
 # Tables phpIPAM essentielles pour migration
-PHPIPAM_TABLES="sections subnets ipaddresses vlans vlanDomains devices deviceTypes users userGroups customers locations"
+PHPIPAM_TABLES="sections subnets ipaddresses vlans vlanDomains devices deviceTypes users userGroups customers locations changelog"
 
 # Tables PowerDNS essentielles  
 POWERDNS_TABLES="domains records domainmetadata cryptokeys"
