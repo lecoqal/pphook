@@ -25,49 +25,43 @@ echo "3) Les deux"
 read -p "Choix: " system
 
 # ==========================================
-# CHOIX DU MODE DE CONFIGURATION
+# SAISIE DES VARIABLES
 # ==========================================
 
 echo ""
-echo "=== Configuration des variables ==="
-echo "1) Variables automatiques (déchiffrement .env.gpg)"
-echo "2) Variables manuelles"
-read -p "Choix: " config_mode
+echo "=== Saisie des variables ==="
 
-if [ "$config_mode" = "1" ]; then
-    echo "Déchiffrement des variables..."
-    eval "$(gpg --quiet --decrypt ../.env.gpg 2>/dev/null | grep -E '^[A-Z_]+=.*' | sed 's/^/export /')"
-    echo -e "${GREEN}[SUCCESS]${NC} Variables chargées depuis .env.gpg"
-else
-    echo ""
-    echo "=== Saisie manuelle des variables ==="
-    
-    read -p "Adresse IP base de données: " DB_IP
-    
+read -p "Adresse IP base de données: " DB_IP
+
+# Demander les infos phpIPAM seulement si nécessaire
+if [ "$system" = "1" ] || [ "$system" = "3" ]; then
     echo ""
     echo "phpIPAM:"
     read -p "Nom de la base: " IPAM_DB_NAME
     read -p "Utilisateur: " IPAM_DB_USER
     read -s -p "Mot de passe: " IPAM_DB_PASS
     echo ""
-    
+fi
+
+# Demander les infos PowerDNS seulement si nécessaire
+if [ "$system" = "2" ] || [ "$system" = "3" ]; then
     echo ""
     echo "PowerDNS:"
     read -p "Nom de la base: " PDNS_DB_NAME
     read -p "Utilisateur: " PDNS_DB_USER
     read -s -p "Mot de passe: " PDNS_DB_PASS
     echo ""
-    
-    # Variables Hook seulement si Import
-    if [ "$action" = "2" ]; then
-        echo ""
-        echo "Hook (pour reset timestamp):"
-        read -p "IP serveur Hook: " HOOK_IP
-        read -p "Utilisateur SSH Hook: " HOOK_USER
-    fi
-    
-    echo -e "${GREEN}[SUCCESS]${NC} Variables configurées manuellement"
 fi
+
+# Variables Hook seulement si Import
+if [ "$action" = "2" ]; then
+    echo ""
+    echo "Hook (pour reset timestamp):"
+    read -p "IP serveur Hook: " HOOK_IP
+    read -p "Utilisateur SSH Hook: " HOOK_USER
+fi
+
+echo -e "${GREEN}[SUCCESS]${NC} Variables configurées"
 
 echo ""
 echo "INFO: Utilisation de DB_IP=$DB_IP"
@@ -79,7 +73,7 @@ echo "INFO: Utilisation de DB_IP=$DB_IP"
 # Tables phpIPAM essentielles pour migration
 PHPIPAM_TABLES="sections subnets ipaddresses vlans vlanDomains devices deviceTypes users userGroups customers locations changelog"
 
-# Tables PowerDNS essentielles  
+# Tables PowerDNS essentielles
 POWERDNS_TABLES="domains records domainmetadata cryptokeys"
 
 # ==========================================
@@ -88,15 +82,15 @@ POWERDNS_TABLES="domains records domainmetadata cryptokeys"
 
 export_tables() {
     local db_name="$1"
-    local db_user="$2" 
+    local db_user="$2"
     local db_pass="$3"
     local tables="$4"
     local output_dir="$5"
-    
+
     mkdir -p "$output_dir"
-    
+
     echo "DEBUG: Connexion vers $DB_IP avec user $db_user pour base $db_name"
-    
+
     # Test de connexion d'abord
     echo "Test connexion..."
     if ! mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" --connect-timeout=10 -e "SELECT 1;" "$db_name" ; then
@@ -104,11 +98,11 @@ export_tables() {
         return 1
     fi
     echo -e "${GREEN}[SUCCESS]${NC} Connexion OK"
-    
+
     for table in $tables; do
         echo "Export: $table"
         echo "DEBUG: mysqldump -u $db_user -p*** -h $DB_IP --single-transaction $db_name $table"
-        
+
         if mysqldump -u "$db_user" -p"$db_pass" -h "$DB_IP" \
             --single-transaction \
             --complete-insert \
@@ -123,11 +117,11 @@ export_tables() {
 import_tables() {
     local db_name="$1"
     local db_user="$2"
-    local db_pass="$3" 
+    local db_pass="$3"
     local input_dir="$4"
-    
+
     echo "DEBUG: Import vers $DB_IP avec user $db_user pour base $db_name"
-    
+
     # Test de connexion d'abord
     echo "Test connexion..."
     if ! mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" --connect-timeout=10 -e "SELECT 1;" "$db_name" >/dev/null 2>&1; then
@@ -135,14 +129,14 @@ import_tables() {
         return 1
     fi
     echo -e "${GREEN}[SUCCESS]${NC} Connexion OK"
-    
+
     for sql_file in "$input_dir"/*.sql; do
         [ ! -f "$sql_file" ] && continue
-        
+
         table=$(basename "$sql_file" .sql)
         echo "Import: $table"
         echo "DEBUG: mysql -u $db_user -p*** -h $DB_IP $db_name < $sql_file"
-        
+
         if mysql -u "$db_user" -p"$db_pass" -h "$DB_IP" "$db_name" < "$sql_file" 2>/dev/null; then
             echo -e "${GREEN}[SUCCESS]${NC} $table"
         else
@@ -150,10 +144,6 @@ import_tables() {
         fi
     done
 }
-
-# ==========================================
-# MENU PRINCIPAL
-# ==========================================
 
 # ==========================================
 # RÉPERTOIRE DE TRAVAIL
