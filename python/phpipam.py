@@ -110,16 +110,27 @@ class PhpIPAMAPI:
                         
                     # Filtrer par date si nécessaire
                     if since and "editDate" in addr:
-                        # Convertir since en string si c'est un datetime
-                        if isinstance(since, datetime):
-                            since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-                        else:
-                            since_str = str(since)
-                            
-                        # Comparer les strings directement
+                        # Récupérer la date d'édition avec vérification de validité
                         edit_date = addr.get("editDate")
-                        if edit_date <= since_str:
-                            continue
+                        
+                        # Si pas de date d'édition ou vide, inclure l'adresse (comportement sécurisé)
+                        if not edit_date or str(edit_date).strip() == "":
+                            logger.warning(f"Date d'édition manquante pour l'adresse {addr.get('ip', 'Unknown')} - inclusion par défaut")
+                            # Pas de continue ici - on laisse l'adresse passer
+                        else:
+                            # Convertir since en string si c'est un datetime
+                            if isinstance(since, datetime):
+                                since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+                            else:
+                                since_str = str(since)
+                                
+                            # Comparer les strings directement - maintenant sécurisé
+                            try:
+                                if edit_date <= since_str:
+                                    continue
+                            except TypeError as e:
+                                # En cas d'erreur de comparaison, logger et inclure l'adresse
+                                logger.warning(f"Erreur de comparaison de date pour l'adresse {addr.get('ip', 'Unknown')}: {e} - inclusion par défaut")
                             
                     # Filtrer par hostname si nécessaire
                     if hostname_filter and hostname_filter.lower() not in addr.get("hostname", "").lower():
