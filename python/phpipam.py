@@ -594,11 +594,12 @@ class PhpIPAMAPI:
         
     def update_address_editdate(self, address_id, new_date=None):
         """
-        Met à jour l'editDate d'une adresse dans phpIPAM
+        Met à jour l'editDate d'une adresse dans phpIPAM en modifiant un champ autorisé
+        phpIPAM mettra automatiquement à jour editDate lors de la modification
         
         Args:
             address_id (str): ID de l'adresse
-            new_date (datetime): Nouvelle date (défaut: maintenant)
+            new_date (datetime): Non utilisé (conservé pour compatibilité)
             
         Returns:
             bool: True si la mise à jour a réussi, False sinon
@@ -606,34 +607,48 @@ class PhpIPAMAPI:
         try:
             if not self.ensure_auth():
                 return False
-                
-            if new_date is None:
-                new_date = datetime.now()
-                
-            # Formater la date pour phpIPAM (format MySQL)
-            formatted_date = new_date.strftime('%Y-%m-%d %H:%M:%S')
             
-            # URL pour modifier une adresse
+            # Récupérer l'adresse actuelle pour conserver ses données
             address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
-            
             headers = {"token": self.token}
-            data = {"editDate": formatted_date}
+            
+            # GET pour récupérer l'adresse
+            get_response = requests.get(address_url, headers=headers)
+            if get_response.status_code != 200:
+                logger.error(f"Impossible de récupérer l'adresse {address_id}")
+                return False
+                
+            address_data = get_response.json()["data"]
+            current_note = address_data.get('note', '') or ''
+            
+            # Ajouter un marqueur invisible pour forcer la mise à jour
+            # On utilise un caractère spécial qui ne change pas l'apparence
+            marker = " [PPHOOK-UPDATE]"
+            
+            # Si le marqueur existe déjà, on l'enlève, sinon on l'ajoute
+            if marker in current_note:
+                new_note = current_note.replace(marker, "").strip()
+            else:
+                new_note = (current_note + marker).strip()
+            
+            # Modifier le champ note pour déclencher la mise à jour d'editDate
+            data = {"note": new_note}
             
             response = requests.patch(address_url, headers=headers, data=data)
-            logger.debug(f"Réponse complète: {response.text}")
+            logger.info(f"Réponse API phpIPAM: {response.text}")  # Pour debug
             
             if response.status_code == 200:
                 result = response.json()
                 if result.get("success"):
-                    logger.info(f"editDate mise à jour pour l'adresse ID {address_id} (nouvelle date: {formatted_date})")
+                    logger.info(f"editDate mis à jour automatiquement pour l'adresse ID {address_id} (modification du champ note)")
                     return True
                 else:
-                    logger.error(f"Échec mise à jour editDate pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
+                    logger.error(f"Échec mise à jour pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
                     return False
             else:
-                logger.error(f"Erreur HTTP lors de la mise à jour editDate: {response.status_code}")
+                logger.error(f"Erreur HTTP lors de la mise à jour: {response.status_code}")
                 return False
                 
         except Exception as e:
-            logger.error(f"Exception lors de la mise à jour editDate pour adresse {address_id}: {str(e)}")
+            logger.error(f"Exception lors de la mise à jour pour adresse {address_id}: {str(e)}")
             return False
