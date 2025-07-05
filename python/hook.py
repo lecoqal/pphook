@@ -331,6 +331,10 @@ def process_address(phpipam, powerdns, address):
     use_generic_email = False
     
     if not user_email:
+        # Vérifier que l'email générique est configuré
+        if not GENERIC_EMAIL or GENERIC_EMAIL.strip() == "":
+            logger.error(f"Email générique non configuré - impossible de notifier l'erreur pour {address.get('id')}")
+            return False
         logger.warning(f"Pas de changelog pour l'adresse {address.get('id')}")
         logger.info(f"Utilisation de l'email générique ({GENERIC_EMAIL})")
         user_email = GENERIC_EMAIL
@@ -349,7 +353,7 @@ def process_address(phpipam, powerdns, address):
         try:
             changelog = phpipam.get_address_changelog(address['id'])
             if changelog and len(changelog) > 0:
-                last_change = changelog[0]
+                last_change = changelog[-1]
                 edit_date = last_change.get('date', 'Date inconnue')
                 action = last_change.get('action', 'Action inconnue')
         except Exception as e:
@@ -374,7 +378,7 @@ def process_address(phpipam, powerdns, address):
         if not use_generic_email:
             changelog_duplicate = phpipam.get_address_changelog(duplicate_address['id'])
             if changelog_duplicate and len(changelog_duplicate) > 0:
-                last_change_duplicate = changelog_duplicate[0]
+                last_change_duplicate = changelog_duplicate[-1]
                 duplicate_edit_date = last_change_duplicate.get('date', 'Date inconnue')
         
         # Déterminer quelle adresse supprimer (la plus récente) SEULEMENT si on a les dates
@@ -694,7 +698,7 @@ def run_script():
     logger.info(f"Démarrage du service de synchronisation phpIPAM-PowerDNS")
     logger.info(f"  - Intervalle: {CHECK_INTERVAL}s (DNS + MAC)")
 
-    last_dns_check = datetime.now()
+    last_dns_check = datetime.now() - timedelta(seconds=CHECK_INTERVAL)
 
     while True:
         try:

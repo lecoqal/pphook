@@ -462,7 +462,7 @@ class PhpIPAMAPI:
                     
                     # Trier par date d'édition pour trouver la plus récente
                     duplicate_addresses.sort(key=lambda x: x['editDate'], reverse=True)
-                    most_recent = duplicate_addresses[0]  # La plus récente
+                    most_recent = duplicate_addresses[-1]  # La plus récente
                     
                     logger.warning(f"Doublon MAC détecté: {cursor}")
                     for addr in duplicate_addresses:
@@ -578,7 +578,7 @@ class PhpIPAMAPI:
         try:
             # Récupérer changelog
             changelog = self.get_address_changelog(address_id)
-            real_name = changelog[0]["user"]
+            real_name = changelog[-1]["user"]
             
             # Récupérer tous les users
             users = self.get_all_users()
