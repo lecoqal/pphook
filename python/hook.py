@@ -118,6 +118,7 @@ SMTP_USERNAME = CONFIG.get('email', 'username', fallback=None)
 SMTP_PASSWORD = CONFIG.get('email', 'password', fallback=None)
 SMTP_USE_TLS = CONFIG.getboolean('email', 'use_tls', fallback=False)
 EMAIL_FROM = CONFIG.get('email', 'from')
+GENERIC_EMAIL = CONFIG.get('email', 'generic_email')
 
 # Configuration des vérifications
 HOSTNAME_PATTERN = re.compile(CONFIG.get('validation', 'hostname_pattern'))
@@ -205,7 +206,7 @@ def send_email(subject, body_content, recipient):
         return False
 
 def notify_error(address, hostname, ip, error_message, username="Utilisateur inconnu", 
-                edit_date="Date inconnue", action="", duplicate_address=None, duplicate_mac=None, user_email=None):
+                edit_date="Date inconnue", action="", duplicate_address=None, duplicate_mac=None, user_email=None, use_generic_email=False):
     """Notification d'erreur universelle - user_email obligatoire"""
     try:
         if not user_email:
@@ -229,15 +230,27 @@ def notify_error(address, hostname, ip, error_message, username="Utilisateur inc
             'hostname': hostname,
             'ip': ip,
             'error_message': error_message,
-            'username': username,
-            'edit_date': edit_date,
-            'action': action,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'ip_ipam': PHPIPAM_URL.replace('/api', '').replace('http://', '').replace('https://', ''),
             'subnet_id': address.get('subnetId', 'Inconnu'),
             'address_id': address.get('id', 'Inconnu'),
             'duplicate_mac': duplicate_mac
         }
+        
+        # Ajouter les infos changelog SEULEMENT si on n'utilise pas l'email générique
+        if not use_generic_email:
+            template_vars.update({
+                'username': username,
+                'edit_date': edit_date,
+                'action': action
+            })
+        else:
+            # Pour l'email générique, on met des valeurs par défaut
+            template_vars.update({
+                'username': "Email générique (pas de changelog)",
+                'edit_date': "Non disponible",
+                'action': "Non disponible"
+            })
         
         # Variables spécifiques aux doublons hostname
         if duplicate_address:
@@ -315,20 +328,24 @@ def process_address(phpipam, powerdns, address):
 
     # Récupérer les informations utilisateur depuis le changelog
     user_email, username = phpipam.get_user_email_from_changelog(address.get('id'))
+    use_generic_email = False
     
     if not user_email:
-        logger.error(f"Impossible de récupérer l'email utilisateur pour l'adresse {address.get('id')} - Arrêt du traitement")
-        return False
+        logger.warning(f"Pas de changelog pour l'adresse {address.get('id')}")
+        logger.info(f"Utilisation de l'email générique ({GENERIC_EMAIL})")
+        user_email = GENERIC_EMAIL
+        username = "Utilisateur inconnu"
+        use_generic_email = True
     
     # Fallback si pas de username
     if not username:
         username = "Utilisateur inconnu"
     
-    # Récupérer autres infos du changelog
+    # Récupérer autres infos du changelog SEULEMENT si on n'utilise pas l'email générique
     edit_date = "Date inconnue"
     action = "Action inconnue"
     
-    if 'id' in address:
+    if not use_generic_email and 'id' in address:
         try:
             changelog = phpipam.get_address_changelog(address['id'])
             if changelog and len(changelog) > 0:
@@ -343,7 +360,7 @@ def process_address(phpipam, powerdns, address):
     if not valid:
         logger.error(f"Données invalides pour l'adresse {address.get('ip')}: {error_message}")
         notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
-                    error_message, username, edit_date, action, user_email=user_email)
+                    error_message, username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
         return False
     
     # Étape 1.5: Vérifier les doublons hostname
@@ -352,27 +369,26 @@ def process_address(phpipam, powerdns, address):
         error_message = f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}."
         logger.warning(error_message)
         
-        # Récupérer la date de modification de l'adresse dupliquée
+        # Récupérer la date de modification de l'adresse dupliquée SEULEMENT si on n'utilise pas l'email générique
         duplicate_edit_date = None
-        changelog_duplicate = phpipam.get_address_changelog(duplicate_address['id'])
-        if changelog_duplicate and len(changelog_duplicate) > 0:
-            last_change_duplicate = changelog_duplicate[0]
-            duplicate_edit_date = last_change_duplicate.get('date', 'Date inconnue')
+        if not use_generic_email:
+            changelog_duplicate = phpipam.get_address_changelog(duplicate_address['id'])
+            if changelog_duplicate and len(changelog_duplicate) > 0:
+                last_change_duplicate = changelog_duplicate[0]
+                duplicate_edit_date = last_change_duplicate.get('date', 'Date inconnue')
         
-        # Déterminer quelle adresse supprimer (la plus récente)
+        # Déterminer quelle adresse supprimer (la plus récente) SEULEMENT si on a les dates
         address_to_delete = None
         
-        if edit_date and duplicate_edit_date:
+        if not use_generic_email and edit_date and duplicate_edit_date:
             if edit_date > duplicate_edit_date:
                 address_to_delete = address
             else:
                 address_to_delete = duplicate_address
         else:
-            logger.error("Impossible de déterminer quelle adresse supprimer")
-            notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
-                        f"{error_message} - Impossible de déterminer quelle adresse supprimer (dates manquantes)", 
-                        username, edit_date, action, duplicate_address, user_email=user_email)
-            return False
+            # Si pas de changelog, on supprime l'adresse courante par défaut
+            logger.warning("Impossible de déterminer quelle adresse supprimer (pas de changelog) - suppression de l'adresse courante")
+            address_to_delete = address
         
         # Supprimer les enregistrements DNS de l'adresse à supprimer
         hostname_to_delete = address_to_delete.get('hostname')
@@ -388,7 +404,7 @@ def process_address(phpipam, powerdns, address):
         # Si c'est l'adresse courante qui est supprimée, on notifie et on retourne False
         if address_to_delete == address:
             notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
-                        error_message, username, edit_date, action, duplicate_address, user_email=user_email)
+                        error_message, username, edit_date, action, duplicate_address, user_email=user_email, use_generic_email=use_generic_email)
             return False
 
     # Étape 2: Récupérer la liste des zones existantes
@@ -436,7 +452,7 @@ def process_address(phpipam, powerdns, address):
         
         # Notifier avec l'email utilisateur
         notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
-                    error, username, edit_date, action, user_email=user_email)
+                    error, username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
 
         return cleanup_success
 
@@ -468,7 +484,7 @@ def process_address(phpipam, powerdns, address):
             fqdn, 
             address.get('ip'), 
             error_callback=lambda msg: notify_error(address, hostname, address.get('ip'), msg, 
-                                                   username, edit_date, action, user_email=user_email)
+                                                   username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
         )
         
         if not success:
@@ -477,7 +493,7 @@ def process_address(phpipam, powerdns, address):
             if corrected:
                 notify_error(address, hostname, address.get('ip'), 
                            "Enregistrements DNS incohérents corrigés automatiquement", 
-                           username, edit_date, action, user_email=user_email)
+                           username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
             result = True
 
     else:

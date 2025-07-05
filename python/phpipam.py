@@ -513,17 +513,22 @@ class PhpIPAMAPI:
             # Trouver le hostname de l'IP
             for address in all_addresses:
                 if address.get('ip') == ip and address.get('hostname'):
-                    target_hostname = address.get('hostname').lower().strip()
-                    break
+                    hostname_value = address.get('hostname')
+                    # Fix: vérifier que hostname n'est pas None
+                    if hostname_value is not None:
+                        target_hostname = hostname_value.lower().strip()
+                        break
             
             if not target_hostname:
                 return False, None
             
             # Trouver la première occurrence de duplication (différente de l'IP donnée)
             for addr in all_addresses:
-                if (addr.get('hostname', '').lower().strip() == target_hostname and 
-                    addr.get('ip') != ip):
-                    return True, addr
+                if addr.get('ip') != ip:
+                    # Fix: sécuriser le .lower() avec vérification None
+                    compare_hostname = addr.get('hostname')
+                    if compare_hostname is not None and compare_hostname.lower().strip() == target_hostname:
+                        return True, addr
             
             return False, None
             
