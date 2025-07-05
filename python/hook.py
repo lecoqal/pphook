@@ -669,11 +669,27 @@ def main():
     error_count = 0
 
     for address in addresses:
+        # Vérifier si editDate est manquante AVANT traitement
+        needs_editdate_update = not address.get('editDate') or str(address.get('editDate')).strip() == ""
+        if needs_editdate_update:
+            logger.info(f"Adresse {address.get('ip')} sans editDate - sera mise à jour après traitement")
+        
+        # Traitement normal
         success = process_address(phpipam, powerdns, address)
+        
+        # Compter les résultats
         if success:
             success_count += 1
         else:
             error_count += 1
+        
+        # Mettre à jour editDate si nécessaire (dans tous les cas)
+        if needs_editdate_update:
+            update_success = phpipam.update_address_editdate(address.get('id'))
+            if update_success:
+                logger.info(f"editDate mise à jour avec succès pour l'adresse {address.get('ip')} (était NULL/vide)")
+            else:
+                logger.warning(f"Échec mise à jour editDate pour l'adresse {address.get('ip')}")
 
     # Enregistrer la date actuelle comme dernière vérification
     save_last_check_time(datetime.now())

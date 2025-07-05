@@ -272,10 +272,10 @@ class PhpIPAMAPI:
             if data["success"]:
                 return data["data"]
             else:
-                logger.error(f"Échec de récupération de l'historique de l'adresse {address_id}: {data.get('message', 'Erreur inconnue')}")
+                logger.warning(f"Échec de récupération de l'historique de l'adresse {address_id}: {data.get('message', 'Erreur inconnue')}")
                 return []
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération de l'historique de l'adresse {address_id}: {str(e)}")
+            logger.warning(f"Impossible de récupérer l'historique de l'adresse {address_id}: {str(e)}")
             return []
         
     def get_addresses_with_mac_and_dhcp_profil(self):
@@ -591,3 +591,48 @@ class PhpIPAMAPI:
             return None, real_name
         except:
             return None, None
+        
+    def update_address_editdate(self, address_id, new_date=None):
+        """
+        Met à jour l'editDate d'une adresse dans phpIPAM
+        
+        Args:
+            address_id (str): ID de l'adresse
+            new_date (datetime): Nouvelle date (défaut: maintenant)
+            
+        Returns:
+            bool: True si la mise à jour a réussi, False sinon
+        """
+        try:
+            if not self.ensure_auth():
+                return False
+                
+            if new_date is None:
+                new_date = datetime.now()
+                
+            # Formater la date pour phpIPAM (format MySQL)
+            formatted_date = new_date.strftime('%Y-%m-%d %H:%M:%S')
+            
+            # URL pour modifier une adresse
+            address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
+            
+            headers = {"token": self.token}
+            data = {"editDate": formatted_date}
+            
+            response = requests.patch(address_url, headers=headers, data=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    logger.info(f"editDate mise à jour pour l'adresse ID {address_id} (nouvelle date: {formatted_date})")
+                    return True
+                else:
+                    logger.error(f"Échec mise à jour editDate pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
+                    return False
+            else:
+                logger.error(f"Erreur HTTP lors de la mise à jour editDate: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Exception lors de la mise à jour editDate pour adresse {address_id}: {str(e)}")
+            return False
