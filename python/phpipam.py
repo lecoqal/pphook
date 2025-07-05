@@ -620,6 +620,7 @@ class PhpIPAMAPI:
             data = {"editDate": formatted_date}
             
             response = requests.patch(address_url, headers=headers, data=data)
+            logger.debug(f"Réponse complète: {response.text}")
             
             if response.status_code == 200:
                 result = response.json()
