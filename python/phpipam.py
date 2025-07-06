@@ -652,3 +652,58 @@ class PhpIPAMAPI:
         except Exception as e:
             logger.error(f"Exception lors de la mise à jour pour adresse {address_id}: {str(e)}")
             return False
+    
+    def create_changelog_entry(self, address_id):
+        """
+        Crée une entrée changelog en modifiant légèrement l'adresse
+        Utilise le champ excludePing pour déclencher un changelog automatique
+        
+        Args:
+            address_id (str): ID de l'adresse
+            
+        Returns:
+            bool: True si la création a réussi, False sinon
+        """
+        try:
+            if not self.ensure_auth():
+                return False
+                
+            # 1. Récupérer l'adresse actuelle
+            address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
+            headers = {"token": self.token}
+            
+            get_response = requests.get(address_url, headers=headers)
+            if get_response.status_code != 200:
+                logger.error(f"Impossible de récupérer l'adresse {address_id} pour créer changelog")
+                return False
+                
+            address_data = get_response.json()["data"]
+            
+            # 2. Modification minimaliste avec excludePing (toggle)
+            current_exclude = address_data.get('excludePing', 0)
+            new_exclude = 1 if current_exclude == 0 else 0
+            
+            logger.debug(f"Création changelog pour adresse {address_id}: excludePing {current_exclude} -> {new_exclude}")
+            
+            # 3. Première modification pour déclencher changelog
+            data = {"excludePing": new_exclude}
+            response1 = requests.patch(address_url, headers=headers, data=data)
+            
+            if response1.status_code != 200:
+                logger.error(f"Échec première modification pour changelog adresse {address_id}: {response1.status_code}")
+                return False
+            
+            # 4. Remettre la valeur originale (deuxième entrée changelog)
+            data = {"excludePing": current_exclude}
+            response2 = requests.patch(address_url, headers=headers, data=data)
+            
+            if response2.status_code != 200:
+                logger.warning(f"Échec remise en état pour adresse {address_id}, mais changelog créé")
+                # On considère que c'est un succès car le changelog est créé
+            
+            logger.info(f"Changelog factice créé pour l'adresse {address_id} (utilisateur: {self.username})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Exception lors de la création changelog pour adresse {address_id}: {str(e)}")
+            return False

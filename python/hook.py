@@ -644,22 +644,23 @@ def main():
     # Récupérer les nouvelles adresses depuis la dernière vérification
     addresses = phpipam.get_addresses(since=last_check)
 
-    if not addresses:
-        logger.info("Aucune nouvelle adresse trouvée")
-        save_last_check_time(datetime.now())
-        return 0
-
-    logger.info(f"Traitement de {len(addresses)} nouvelles adresses")
-
-    # Traiter chaque nouvelle adresse
-    success_count = 0
-    error_count = 0
-
     for address in addresses:
         # Vérifier si editDate est manquante AVANT traitement
         needs_editdate_update = not address.get('editDate') or str(address.get('editDate')).strip() == ""
+        
+        # Vérifier si changelog manquant AVANT traitement
+        needs_changelog = False
+        try:
+            changelog = phpipam.get_address_changelog(address.get('id'))
+            needs_changelog = not changelog or len(changelog) == 0
+        except Exception:
+            needs_changelog = True
+        
         if needs_editdate_update:
             logger.info(f"Adresse {address.get('ip')} sans editDate - sera mise à jour après traitement")
+        
+        if needs_changelog:
+            logger.info(f"Adresse {address.get('ip')} sans changelog - un changelog factice sera créé après traitement")
         
         # Traitement normal
         success = process_address(phpipam, powerdns, address)
@@ -674,9 +675,17 @@ def main():
         if needs_editdate_update:
             update_success = phpipam.update_address_editdate(address.get('id'))
             if update_success:
-                logger.info(f"editDate mise à jour avec succès pour l'adresse {address.get('ip')} (était NULL/vide)")
+                logger.info(f"editDate mis à jour avec succès pour l'adresse {address.get('ip')} (était NULL/vide)")
             else:
                 logger.warning(f"Échec mise à jour editDate pour l'adresse {address.get('ip')}")
+        
+        # Créer changelog factice si nécessaire (dans tous les cas)
+        if needs_changelog:
+            changelog_success = phpipam.create_changelog_entry(address.get('id'))
+            if changelog_success:
+                logger.info(f"Changelog factice créé avec succès pour l'adresse {address.get('ip')} (était vide)")
+            else:
+                logger.warning(f"Échec création changelog factice pour l'adresse {address.get('ip')}")
 
     # Enregistrer la date actuelle comme dernière vérification
     save_last_check_time(datetime.now())
