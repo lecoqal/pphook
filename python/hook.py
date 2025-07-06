@@ -130,7 +130,7 @@ LAST_CHECK_FILE = CONFIG.get('script', 'last_check_file', fallback='/var/lib/pph
 EMAIL_TEMPLATE_MAC_DUPLICATE = "email_mac_duplicate.j2"
 EMAIL_TEMPLATE_HOSTNAME_DUPLICATE = "email_hostname_duplicate.j2"
 EMAIL_TEMPLATE_DNS_ERROR = "email_dns_error.j2"
-BYPASS_TIMESTAMP_PROTECTION = False
+BYPASS_FILE = "/var/lib/pphook/bypass_protection"
 
 # =================================================
 #  +-----------------------------------------+
@@ -546,64 +546,37 @@ def validate_address_data(address):
 # =================================================
 
 def get_last_check_time():
-    """
-    Récupère la date de la dernière vérification
-    Version améliorée avec meilleure gestion des formats et fallback
-    Avec bypass de protection pour reset_last_check()
-    """
-    default_time = datetime.now() - timedelta(days=1)  # Par défaut, on vérifie les dernières 24 heures
-
-    if os.path.exists(LAST_CHECK_FILE):
-        try:
-            with open(LAST_CHECK_FILE, 'r') as f:
-                content = f.read().strip()
-
-                # Essayer d'interpréter comme timestamp (format float)
-                try:
-                    timestamp = float(content)
-                    last_check = datetime.fromtimestamp(timestamp)
-                    logger.info(f"Dernière vérification lue (timestamp): {last_check}")
-
-                    # Vérifier si la date est dans le futur (erreur)
-                    if last_check > datetime.now():
-                        logger.warning(f"Dernière vérification dans le futur ({last_check}), utilisation de la valeur par défaut")
-                        return default_time
-
-                    # Vérifier si la date est trop ancienne (> 7 jours) SAUF si bypass activé
-                    if not BYPASS_TIMESTAMP_PROTECTION and datetime.now() - last_check > timedelta(days=7):
-                        logger.warning(f"Dernière vérification trop ancienne ({last_check}), limitation à 24h")
-                        return default_time
-
-                    return last_check
-                except ValueError:
-                    # Si ce n'est pas un timestamp, essayer comme chaîne de date
-                    date_formats = [
-                        "%Y-%m-%d %H:%M:%S",
-                        "%Y-%m-%dT%H:%M:%S",
-                        "%Y-%m-%d"
-                    ]
-
-                    for fmt in date_formats:
-                        try:
-                            last_check = datetime.strptime(content, fmt)
-                            logger.info(f"Dernière vérification lue (format {fmt}): {last_check}")
-                            
-                            # Même vérification que pour timestamp
-                            if not BYPASS_TIMESTAMP_PROTECTION and datetime.now() - last_check > timedelta(days=7):
-                                logger.warning(f"Dernière vérification trop ancienne ({last_check}), limitation à 24h")
-                                return default_time
-                                
-                            return last_check
-                        except ValueError:
-                            continue
-
-                    # Si aucun format ne correspond
-                    logger.error(f"Format de date non reconnu dans le fichier last_check: {content}")
-        except Exception as e:
-            logger.error(f"Erreur lors de la lecture du fichier de dernière vérification: {str(e)}")
-
-    logger.warning(f"Utilisation de la date par défaut: {default_time}")
-    return default_time
+    """Récupère la date de la dernière vérification - Version simplifiée"""
+    default_time = datetime.now() - timedelta(days=1)
+    
+    # Si pas de fichier, utiliser défaut
+    if not os.path.exists(LAST_CHECK_FILE):
+        return default_time
+    
+    try:
+        # Lire le timestamp
+        with open(LAST_CHECK_FILE, 'r') as f:
+            timestamp = float(f.read().strip())
+        
+        last_check = datetime.fromtimestamp(timestamp)
+        logger.info(f"Dernière vérification: {last_check}")
+        
+        # Bypass si fichier existe
+        if os.path.exists(BYPASS_FILE):
+            logger.info("Bypass activé - ignore protection")
+            os.remove(BYPASS_FILE)  # Supprimer après usage
+            return last_check
+        
+        # Protection normale (> 7 jours)
+        if datetime.now() - last_check > timedelta(days=7):
+            logger.warning(f"Trop ancien ({last_check}), limitation à 24h")
+            return default_time
+            
+        return last_check
+        
+    except Exception as e:
+        logger.error(f"Erreur lecture timestamp: {e}")
+        return default_time
 
 def save_last_check_time(check_time):
     """
@@ -628,22 +601,23 @@ def save_last_check_time(check_time):
         logger.error(f"Erreur lors de l'enregistrement de la dernière vérification: {str(e)}")
 
 def reset_last_check():
-    """Reset le timestamp avec bypass de protection"""
-    global BYPASS_TIMESTAMP_PROTECTION
+    """Reset timestamp avec bypass"""
     try:
-        BYPASS_TIMESTAMP_PROTECTION = True  # Activer le bypass
-        current_time = datetime.now()
-        new_time = current_time - timedelta(days=365 * 20)
+        # Créer fichier bypass
+        os.makedirs(os.path.dirname(BYPASS_FILE), exist_ok=True)
+        with open(BYPASS_FILE, 'w') as f:
+            f.write("bypass")
         
+        # Reset timestamp à -20 ans
+        new_time = datetime.now() - timedelta(days=365 * 20)
         with open(LAST_CHECK_FILE, 'w') as f:
             f.write(str(new_time.timestamp()))
         
-        logger.info("Timestamp reset à -20 ans avec bypass de protection")
+        logger.info("Timestamp reset avec bypass")
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"Erreur reset: {e}")
         return False
-    finally:
-        BYPASS_TIMESTAMP_PROTECTION = False  # Désactiver après
 
 # =================================================
 #  +-----------------------------------------+
