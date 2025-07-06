@@ -130,6 +130,7 @@ LAST_CHECK_FILE = CONFIG.get('script', 'last_check_file', fallback='/var/lib/pph
 EMAIL_TEMPLATE_MAC_DUPLICATE = "email_mac_duplicate.j2"
 EMAIL_TEMPLATE_HOSTNAME_DUPLICATE = "email_hostname_duplicate.j2"
 EMAIL_TEMPLATE_DNS_ERROR = "email_dns_error.j2"
+BYPASS_TIMESTAMP_PROTECTION = False
 
 # =================================================
 #  +-----------------------------------------+
@@ -548,6 +549,7 @@ def get_last_check_time():
     """
     Récupère la date de la dernière vérification
     Version améliorée avec meilleure gestion des formats et fallback
+    Avec bypass de protection pour reset_last_check()
     """
     default_time = datetime.now() - timedelta(days=1)  # Par défaut, on vérifie les dernières 24 heures
 
@@ -567,8 +569,8 @@ def get_last_check_time():
                         logger.warning(f"Dernière vérification dans le futur ({last_check}), utilisation de la valeur par défaut")
                         return default_time
 
-                    # Vérifier si la date est trop ancienne (> 7 jours)
-                    if datetime.now() - last_check > timedelta(days=7):
+                    # Vérifier si la date est trop ancienne (> 7 jours) SAUF si bypass activé
+                    if not BYPASS_TIMESTAMP_PROTECTION and datetime.now() - last_check > timedelta(days=7):
                         logger.warning(f"Dernière vérification trop ancienne ({last_check}), limitation à 24h")
                         return default_time
 
@@ -585,6 +587,12 @@ def get_last_check_time():
                         try:
                             last_check = datetime.strptime(content, fmt)
                             logger.info(f"Dernière vérification lue (format {fmt}): {last_check}")
+                            
+                            # Même vérification que pour timestamp
+                            if not BYPASS_TIMESTAMP_PROTECTION and datetime.now() - last_check > timedelta(days=7):
+                                logger.warning(f"Dernière vérification trop ancienne ({last_check}), limitation à 24h")
+                                return default_time
+                                
                             return last_check
                         except ValueError:
                             continue
@@ -620,17 +628,22 @@ def save_last_check_time(check_time):
         logger.error(f"Erreur lors de l'enregistrement de la dernière vérification: {str(e)}")
 
 def reset_last_check():
-    """Reset le timestamp last_check à 20 ans en arrière"""
+    """Reset le timestamp avec bypass de protection"""
+    global BYPASS_TIMESTAMP_PROTECTION
     try:
+        BYPASS_TIMESTAMP_PROTECTION = True  # Activer le bypass
         current_time = datetime.now()
         new_time = current_time - timedelta(days=365 * 20)
         
         with open(LAST_CHECK_FILE, 'w') as f:
             f.write(str(new_time.timestamp()))
         
+        logger.info("Timestamp reset à -20 ans avec bypass de protection")
         return True
     except Exception:
         return False
+    finally:
+        BYPASS_TIMESTAMP_PROTECTION = False  # Désactiver après
 
 # =================================================
 #  +-----------------------------------------+
