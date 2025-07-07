@@ -386,7 +386,6 @@ class PhpIPAMAPI:
     def remove_mac_from_address(self, address_id):
         """
         Supprime la MAC d'une adresse dans phpIPAM
-        CORRIGÉ: Gestion robuste des réponses vides/non-JSON
         
         Args:
             address_id (str): ID de l'adresse
@@ -654,48 +653,120 @@ class PhpIPAMAPI:
         except:
             return None, None
         
-    def update_address_editdate(self, address_id, new_date=None):
+    def _handle_patch_response(self, response, operation_name):
         """
-        Met à jour l'editDate d'une adresse dans phpIPAM en modifiant un champ autorisé
-        phpIPAM mettra automatiquement à jour editDate lors de la modification
+        Méthode helper privée pour gérer les réponses PATCH phpIPAM
         
         Args:
-            address_id (str): ID de l'adresse
-            new_date (datetime): Non utilisé (conservé pour compatibilité)
+            response: Objet Response de requests
+            operation_name (str): Nom de l'opération pour les logs
             
         Returns:
-            bool: True si la mise à jour a réussi, False sinon
+            bool: True si succès, False sinon
+        """
+        logger.debug(f"{operation_name} - Status: {response.status_code}")
+        logger.debug(f"{operation_name} - Raw response length: {len(response.text)}")
+        logger.debug(f"{operation_name} - Raw response: '{response.text[:200]}...' (truncated)")
+        
+        if response.status_code == 200:
+            response_text = response.text.strip()
+            
+            # *** CORRECTION: Gestion des réponses vraiment vides ***
+            if len(response_text) == 0:
+                logger.debug(f"{operation_name} - Réponse complètement vide (succès)")
+                return True
+            
+            # Vérifier si c'est juste des espaces/retours à la ligne
+            if not response_text:
+                logger.debug(f"{operation_name} - Réponse vide après strip (succès)")
+                return True
+            
+            # Tentative de parsing JSON
+            try:
+                result = response.json()
+                
+                # Vérifier la structure de la réponse
+                if isinstance(result, dict):
+                    success = result.get("success", True)  # Default True si pas de champ success
+                    if success:
+                        logger.debug(f"{operation_name} - Succès JSON: {result}")
+                        return True
+                    else:
+                        logger.warning(f"{operation_name} - Échec JSON: {result.get('message', 'Erreur inconnue')}")
+                        return False
+                else:
+                    # Réponse JSON mais pas un dict (peut arriver)
+                    logger.debug(f"{operation_name} - JSON non-dict mais status 200 (succès probable): {result}")
+                    return True
+                    
+            except ValueError as json_error:
+                # Réponse non-JSON mais status 200
+                logger.debug(f"{operation_name} - Réponse non-JSON mais status 200: {json_error}")
+                logger.debug(f"{operation_name} - Contenu: '{response_text[:100]}...'")
+                
+                # Si c'est du HTML d'erreur, c'est un échec
+                if response_text.lower().startswith('<!doctype') or response_text.lower().startswith('<html'):
+                    logger.warning(f"{operation_name} - Réponse HTML inattendue (erreur serveur)")
+                    return False
+                
+                # Sinon, on considère que c'est un succès
+                logger.info(f"{operation_name} - Réponse non-JSON acceptée comme succès")
+                return True
+                
+        elif response.status_code == 204:
+            # 204 No Content = succès explicite
+            logger.debug(f"{operation_name} - Status 204 No Content (succès)")
+            return True
+            
+        else:
+            logger.warning(f"{operation_name} - Erreur HTTP: {response.status_code}")
+            logger.warning(f"{operation_name} - Message: {response.text[:200]}...")
+            return False
+
+    def update_address_editdate(self, address_id, new_date=None):
+        """
+        Met à jour l'editDate d'une adresse dans phpIPAM
         """
         try:
             if not self.ensure_auth():
                 return False
             
-            # Récupérer l'adresse actuelle pour conserver ses données
+            # *** CORRECTION: Validation de l'ID ***
+            if not address_id or str(address_id).strip() == "":
+                logger.error("ID d'adresse invalide pour mise à jour editDate")
+                return False
+            
+            # Récupérer l'adresse actuelle
             address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
             headers = {"token": self.token}
             
-            # GET pour récupérer l'adresse
             get_response = self.session.get(address_url, headers=headers)
-            if get_response.status_code != 200:
-                logger.error(f"Impossible de récupérer l'adresse {address_id}")
+            
+            # *** CORRECTION: Gestion d'erreur plus explicite ***
+            if get_response.status_code == 404:
+                logger.error(f"Adresse {address_id} non trouvée (404) - peut-être supprimée")
+                return False
+            elif get_response.status_code != 200:
+                logger.error(f"Impossible de récupérer l'adresse {address_id}: {get_response.status_code}")
                 return False
                 
-            address_data = get_response.json()["data"]
+            try:
+                address_data = get_response.json()["data"]
+            except (ValueError, KeyError) as e:
+                logger.error(f"Réponse invalide lors de la récupération de l'adresse {address_id}: {e}")
+                return False
+                
             current_note = address_data.get('note', '') or ''
             
-            # Ajouter un marqueur invisible pour forcer la mise à jour
+            # Toggle du marqueur pour forcer la mise à jour
             marker = " [PPHOOK-UPDATE]"
-            
-            # Si le marqueur existe déjà, on l'enlève, sinon on l'ajoute
             if marker in current_note:
                 new_note = current_note.replace(marker, "").strip()
             else:
                 new_note = (current_note + marker).strip()
             
-            # Payload JSON
+            # Requête PATCH
             payload = {"note": new_note}
-            
-            # Headers avec Content-Type JSON
             patch_headers = {
                 "token": self.token,
                 "Content-Type": "application/json"
@@ -703,125 +774,78 @@ class PhpIPAMAPI:
             
             response = self.session.patch(address_url, headers=patch_headers, json=payload)
             
-            logger.debug(f"Requête PATCH: {address_url}")
-            logger.debug(f"Payload: {payload}")
-            logger.debug(f"Status: {response.status_code}")
-            logger.debug(f"Raw response: '{response.text}'")
-            
-            if response.status_code == 200:
-                # Vérifier si la réponse contient du JSON
-                response_text = response.text.strip()
-                
-                if not response_text:
-                    # Réponse vide = succès pour certaines APIs
-                    logger.info(f"editDate mis à jour avec succès pour l'adresse ID {address_id} (réponse vide)")
-                    return True
-                
-                try:
-                    result = response.json()
-                    if result.get("success", True):  # Default True si pas de champ success
-                        logger.info(f"editDate mis à jour avec succès pour l'adresse ID {address_id}")
-                        return True
-                    else:
-                        logger.error(f"Échec mise à jour pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
-                        return False
-                except ValueError as json_error:
-                    # Réponse non-JSON mais status 200 = probablement succès
-                    logger.warning(f"Réponse non-JSON mais status 200 pour adresse {address_id}: {json_error}")
-                    logger.info(f"editDate probablement mis à jour avec succès pour l'adresse ID {address_id}")
-                    return True
-                    
+            # Utilisation de la méthode helper
+            if self._handle_patch_response(response, "Update editDate"):
+                logger.info(f"editDate mis à jour avec succès pour l'adresse ID {address_id}")
+                return True
             else:
-                logger.error(f"Erreur HTTP lors de la mise à jour: {response.status_code} - {response.text}")
+                logger.error(f"Échec mise à jour editDate pour adresse {address_id}")
                 return False
                 
         except Exception as e:
             logger.error(f"Exception lors de la mise à jour pour adresse {address_id}: {str(e)}")
             return False
-    
+
     def create_changelog_entry(self, address_id):
         """
         Crée une entrée changelog en modifiant légèrement l'adresse
-        Utilise le champ excludePing pour déclencher un changelog automatique
-        
-        Args:
-            address_id (str): ID de l'adresse
-            
-        Returns:
-            bool: True si la création a réussi, False sinon
         """
         try:
             if not self.ensure_auth():
                 return False
+            
+            # *** CORRECTION: Validation de l'ID ***
+            if not address_id or str(address_id).strip() == "":
+                logger.error("ID d'adresse invalide pour création changelog")
+                return False
                 
-            # 1. Récupérer l'adresse actuelle
+            # Récupérer l'adresse actuelle
             address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
             headers = {"token": self.token}
             
             get_response = self.session.get(address_url, headers=headers)
-            if get_response.status_code != 200:
-                logger.error(f"Impossible de récupérer l'adresse {address_id} pour créer changelog")
+            
+            # *** CORRECTION: Gestion d'erreur plus explicite ***
+            if get_response.status_code == 404:
+                logger.warning(f"Adresse {address_id} non trouvée pour création changelog (peut-être supprimée)")
+                return False
+            elif get_response.status_code != 200:
+                logger.error(f"Impossible de récupérer l'adresse {address_id} pour créer changelog: {get_response.status_code}")
                 return False
                 
-            address_data = get_response.json()["data"]
-            
-            # 2. Modification minimaliste avec excludePing (toggle)
+            try:
+                address_data = get_response.json()["data"]
+            except (ValueError, KeyError) as e:
+                logger.error(f"Réponse invalide lors de la récupération pour changelog {address_id}: {e}")
+                return False
+                
+            # Toggle excludePing pour créer du changelog
             current_exclude = address_data.get('excludePing', 0)
             new_exclude = 1 if current_exclude == 0 else 0
             
             logger.debug(f"Création changelog pour adresse {address_id}: excludePing {current_exclude} -> {new_exclude}")
             
-            # Headers avec Content-Type JSON
             patch_headers = {
                 "token": self.token,
                 "Content-Type": "application/json"
             }
             
-            # *** FONCTION HELPER POUR GÉRER LES RÉPONSES ***
-            def handle_patch_response(response, operation_name):
-                logger.debug(f"{operation_name} - Status: {response.status_code}")
-                logger.debug(f"{operation_name} - Raw response: '{response.text}'")
-                
-                if response.status_code == 200:
-                    response_text = response.text.strip()
-                    
-                    if not response_text:
-                        logger.debug(f"{operation_name} - Réponse vide (succès)")
-                        return True
-                    
-                    try:
-                        result = response.json()
-                        if result.get("success", True):
-                            logger.debug(f"{operation_name} - Succès JSON")
-                            return True
-                        else:
-                            logger.warning(f"{operation_name} - Échec: {result.get('message', 'Erreur inconnue')}")
-                            return False
-                    except ValueError:
-                        # Réponse non-JSON mais status 200 = probablement succès
-                        logger.debug(f"{operation_name} - Réponse non-JSON mais status 200 (succès probable)")
-                        return True
-                else:
-                    logger.warning(f"{operation_name} - Erreur HTTP: {response.status_code} - {response.text}")
-                    return False
-            
-            # 3. Première modification pour déclencher changelog
+            # Première modification
             payload1 = {"excludePing": new_exclude}
             response1 = self.session.patch(address_url, headers=patch_headers, json=payload1)
             
-            if not handle_patch_response(response1, "Première modification"):
+            if not self._handle_patch_response(response1, "Première modification changelog"):
                 logger.error(f"Échec première modification pour changelog adresse {address_id}")
                 return False
             
-            # 4. Remettre la valeur originale (deuxième entrée changelog)
+            # Remise en état
             payload2 = {"excludePing": current_exclude}
             response2 = self.session.patch(address_url, headers=patch_headers, json=payload2)
             
-            if not handle_patch_response(response2, "Remise en état"):
+            if not self._handle_patch_response(response2, "Remise en état changelog"):
                 logger.warning(f"Échec remise en état pour adresse {address_id}, mais changelog créé")
-                # On considère que c'est un succès car le changelog est créé
             
-            logger.info(f"Changelog factice créé pour l'adresse {address_id} (utilisateur: {self.username})")
+            logger.info(f"Changelog factice créé pour l'adresse {address_id}")
             return True
             
         except Exception as e:

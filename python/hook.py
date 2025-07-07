@@ -323,8 +323,7 @@ def notify_mac_duplicate_callback(duplicate_info):
 def process_address(phpipam, powerdns, address):
     """
     Fonction principale de traitement d'une adresse
-    Avec email obligatoire pour toutes les notifications
-    MODIFIÉE pour utiliser le cache DNS
+    CORRIGÉE : Logique de gestion des doublons améliorée
     """
     logger.info(f"Traitement de l'adresse IP {address.get('ip')} ({address.get('hostname')})")
 
@@ -333,7 +332,6 @@ def process_address(phpipam, powerdns, address):
     use_generic_email = False
     
     if not user_email:
-        # Vérifier que l'email générique est configuré
         if not GENERIC_EMAIL or GENERIC_EMAIL.strip() == "":
             logger.error(f"Email générique non configuré - impossible de notifier l'erreur pour {address.get('id')}")
             return False
@@ -343,7 +341,6 @@ def process_address(phpipam, powerdns, address):
         username = "Utilisateur inconnu"
         use_generic_email = True
     
-    # Fallback si pas de username
     if not username:
         username = "Utilisateur inconnu"
     
@@ -375,26 +372,69 @@ def process_address(phpipam, powerdns, address):
         error_message = f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}."
         logger.warning(error_message)
         
-        # Récupérer la date de modification de l'adresse dupliquée SEULEMENT si on n'utilise pas l'email générique
-        duplicate_edit_date = None
-        if not use_generic_email:
-            changelog_duplicate = phpipam.get_address_changelog(duplicate_address['id'])
-            if changelog_duplicate and len(changelog_duplicate) > 0:
-                last_change_duplicate = changelog_duplicate[-1]
-                duplicate_edit_date = last_change_duplicate.get('date', 'Date inconnue')
-        
-        # Déterminer quelle adresse supprimer (la plus récente) SEULEMENT si on a les dates
+        # Stratégie de résolution des doublons
         address_to_delete = None
+        resolution_strategy = None
         
-        if not use_generic_email and edit_date and duplicate_edit_date:
-            if edit_date > duplicate_edit_date:
-                address_to_delete = address
-            else:
-                address_to_delete = duplicate_address
-        else:
-            # Si pas de changelog, on supprime l'adresse courante par défaut
-            logger.warning("Impossible de déterminer quelle adresse supprimer (pas de changelog) - suppression de l'adresse courante")
+        # Stratégie 1 : Comparer les dates d'édition si disponibles
+        if not use_generic_email:
+            try:
+                # Date de l'adresse courante
+                current_edit_date = None
+                if edit_date != "Date inconnue":
+                    current_edit_date = edit_date
+                elif address.get('editDate'):
+                    current_edit_date = address.get('editDate')
+                
+                # Date de l'adresse dupliquée
+                duplicate_edit_date = None
+                if duplicate_address.get('editDate'):
+                    duplicate_edit_date = duplicate_address.get('editDate')
+                else:
+                    # Essayer de récupérer depuis le changelog
+                    try:
+                        changelog_duplicate = phpipam.get_address_changelog(duplicate_address['id'])
+                        if changelog_duplicate and len(changelog_duplicate) > 0:
+                            duplicate_edit_date = changelog_duplicate[-1].get('date')
+                    except Exception:
+                        pass
+                
+                # Comparer les dates si on a les deux
+                if current_edit_date and duplicate_edit_date:
+                    try:
+                        if current_edit_date > duplicate_edit_date:
+                            address_to_delete = address
+                            resolution_strategy = f"adresse courante plus récente ({current_edit_date} > {duplicate_edit_date})"
+                        else:
+                            address_to_delete = duplicate_address
+                            resolution_strategy = f"adresse dupliquée plus récente ({duplicate_edit_date} >= {current_edit_date})"
+                    except Exception as e:
+                        logger.warning(f"Erreur comparaison dates: {e}")
+                        
+            except Exception as e:
+                logger.warning(f"Erreur récupération dates pour résolution doublon: {e}")
+        
+        # Stratégie 2 : Fallback sur l'ID (plus petit = plus ancien)
+        if address_to_delete is None:
+            try:
+                current_id = int(address.get('id', 0))
+                duplicate_id = int(duplicate_address.get('id', 0))
+                
+                if current_id > duplicate_id:
+                    address_to_delete = address
+                    resolution_strategy = f"ID plus récent ({current_id} > {duplicate_id})"
+                else:
+                    address_to_delete = duplicate_address
+                    resolution_strategy = f"ID plus ancien ({duplicate_id} >= {current_id})"
+            except Exception as e:
+                logger.warning(f"Erreur comparaison IDs: {e}")
+        
+        # Stratégie 3 : Dernier recours - supprimer l'adresse courante
+        if address_to_delete is None:
             address_to_delete = address
+            resolution_strategy = "dernier recours (pas de critère de comparaison)"
+        
+        logger.info(f"Résolution doublon hostname: suppression {address_to_delete.get('ip')} (stratégie: {resolution_strategy})")
         
         # Supprimer les enregistrements DNS de l'adresse à supprimer
         hostname_to_delete = address_to_delete.get('hostname')
@@ -410,14 +450,16 @@ def process_address(phpipam, powerdns, address):
         # Si c'est l'adresse courante qui est supprimée, on notifie et on retourne False
         if address_to_delete == address:
             notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
-                        error_message, username, edit_date, action, duplicate_address, user_email=user_email, use_generic_email=use_generic_email)
+                        f"{error_message} Adresse supprimée ({resolution_strategy})", username, edit_date, action, 
+                        duplicate_address, user_email=user_email, use_generic_email=use_generic_email)
             return False
+        else:
+            logger.info(f"Doublon résolu : adresse {duplicate_address.get('ip')} supprimée, traitement continue pour {address.get('ip')}")
 
-    # *** MODIFICATION PRINCIPALE : Utilisation du cache ***
-    # Étape 2: Récupérer la liste des zones existantes AVEC CACHE
+    # Utilisation du cache DNS
     existing_zones = powerdns.get_existing_zones_cached()
     
-    # Log pour debug/monitoring du cache (optionnel, peut être commenté en prod)
+    # Log pour debug/monitoring du cache (optionnel)
     cache_info = powerdns.get_cache_info()
     logger.debug(f"Cache DNS: {cache_info['status']}, {cache_info['zones_count']} zones, expire dans {cache_info['expires_in']}s")
 
@@ -429,10 +471,7 @@ def process_address(phpipam, powerdns, address):
     if not is_valid:
         logger.warning(f"Hostname invalide '{hostname}': {error}")
 
-        # Supprimer les enregistrements existants pour cette IP
         ip = address.get('ip')
-
-        # Vérifier si un PTR existe
         ptr_name = powerdns.get_ptr_name_from_ip(ip)
         reverse_zone = powerdns.get_reverse_zone_from_ip(ip)
         ptr_exists = powerdns.ensure_zone_exists(reverse_zone) and powerdns.get_record(reverse_zone, ptr_name, "PTR")
@@ -446,22 +485,18 @@ def process_address(phpipam, powerdns, address):
                 if a_record:
                     a_records_found.append((zone_with_dot, f"{hostname}."))
 
-        # Supprimer les enregistrements trouvés
         cleanup_success = True
 
-        # Supprimer le PTR si nécessaire
         if ptr_exists:
             logger.info(f"Suppression du PTR invalide pour {ip}")
             if not powerdns.delete_record(reverse_zone, ptr_name, "PTR"):
                 cleanup_success = False
 
-        # Supprimer les enregistrements A trouvés
         for zone, record_name in a_records_found:
             logger.info(f"Suppression de l'enregistrement A invalide {record_name} dans la zone {zone}")
             if not powerdns.delete_record(zone, record_name, "A"):
                 cleanup_success = False
         
-        # Notifier avec l'email utilisateur
         notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
                     error, username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
 
@@ -469,27 +504,21 @@ def process_address(phpipam, powerdns, address):
 
     # Si le hostname est valide, continuer avec le traitement normal
     fqdn = hostname
-
-    # Étape 4: Vérifier l'état des enregistrements DNS actuels
     dns_status = powerdns.check_dns_records_status(fqdn, address.get('ip'))
 
-    # Étape 5: Traiter selon le cas déterminé
+    # Traiter selon le cas déterminé
     result = False
 
-    # Cas 1: Ni A ni PTR - ne rien faire
     if dns_status == 'no_records':
         logger.info(f"Aucun enregistrement DNS pour {fqdn} ({address.get('ip')}), aucune action nécessaire")
         result = True
 
-    # Cas 2: PTR sans A - supprimer le PTR
     elif dns_status == 'ptr_only':
         result = powerdns.handle_orphaned_ptr(fqdn, address.get('ip'))
 
-    # Cas 3: A sans PTR - créer le PTR
     elif dns_status == 'a_only':
         result = powerdns.create_missing_ptr(fqdn, address.get('ip'))
 
-    # Cas 4: A et PTR existent - vérifier la cohérence
     elif dns_status == 'both_exist':
         success, corrected, error_msg = powerdns.verify_record_consistency(
             fqdn, 
