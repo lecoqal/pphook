@@ -630,28 +630,6 @@ class PhpIPAMAPI:
             return response.json()["data"]
         except:
             return []
-
-    def get_user_email_from_changelog(self, address_id):
-        """
-        Récupère l'email de l'utilisateur depuis le changelog
-        Returns: (email, real_name) ou (None, None)
-        """
-        try:
-            # Récupérer changelog
-            changelog = self.get_address_changelog(address_id)
-            real_name = changelog[-1]["user"]
-            
-            # Récupérer tous les users
-            users = self.get_all_users()
-            
-            # Trouver l'email
-            for user in users:
-                if user["real_name"] == real_name:
-                    return user["email"], real_name
-            
-            return None, real_name
-        except:
-            return None, None
         
     def _handle_patch_response(self, response, operation_name):
         """
