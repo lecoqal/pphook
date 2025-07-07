@@ -324,6 +324,7 @@ def process_address(phpipam, powerdns, address):
     """
     Fonction principale de traitement d'une adresse
     Avec email obligatoire pour toutes les notifications
+    MODIFIÉE pour utiliser le cache DNS
     """
     logger.info(f"Traitement de l'adresse IP {address.get('ip')} ({address.get('hostname')})")
 
@@ -412,8 +413,13 @@ def process_address(phpipam, powerdns, address):
                         error_message, username, edit_date, action, duplicate_address, user_email=user_email, use_generic_email=use_generic_email)
             return False
 
-    # Étape 2: Récupérer la liste des zones existantes
-    existing_zones = powerdns.get_existing_zones()
+    # *** MODIFICATION PRINCIPALE : Utilisation du cache ***
+    # Étape 2: Récupérer la liste des zones existantes AVEC CACHE
+    existing_zones = powerdns.get_existing_zones_cached()
+    
+    # Log pour debug/monitoring du cache (optionnel, peut être commenté en prod)
+    cache_info = powerdns.get_cache_info()
+    logger.debug(f"Cache DNS: {cache_info['status']}, {cache_info['zones_count']} zones, expire dans {cache_info['expires_in']}s")
 
     # Étape 3: Valider que le hostname correspond à une zone existante
     hostname = address.get('hostname')
@@ -626,32 +632,31 @@ def reset_last_check():
 # =================================================
 
 def main():
-    """Fonction principale"""
+    """Fonction principale MODIFIÉE avec monitoring cache"""
     logger.info("Démarrage du script d'intégration phpIPAM-PowerDNS")
 
     success_count = 0
     error_count = 0
 
-    # Initialiser les clients API
     phpipam = ipam(PHPIPAM_URL, PHPIPAM_APP_ID, PHPIPAM_USERNAME, PHPIPAM_PASSWORD, config=CONFIG)
     powerdns = pdns(POWERDNS_URL, POWERDNS_API_KEY, POWERDNS_SERVER, config=CONFIG)
 
-    # Authentification à phpIPAM
     if not phpipam.authenticate():
         logger.error("Échec d'authentification à phpIPAM, arrêt du script")
         return 1
 
-    # Récupérer la date de la dernière vérification
     last_check = get_last_check_time()
 
-    # Récupérer les nouvelles adresses depuis la dernière vérification
+    # *** PRÉCHARGEMENT DU CACHE DNS ***
+    logger.info("Préchargement du cache DNS zones...")
+    zones = powerdns.get_existing_zones_cached(force_refresh=True)
+    logger.info(f"Cache DNS initialisé avec {len(zones)} zones")
+
     addresses = phpipam.get_addresses(since=last_check)
 
     for address in addresses:
-        # Vérifier si editDate est manquante AVANT traitement
         needs_editdate_update = not address.get('editDate') or str(address.get('editDate')).strip() == ""
         
-        # Vérifier si changelog manquant AVANT traitement
         needs_changelog = False
         try:
             changelog = phpipam.get_address_changelog(address.get('id'))
@@ -665,16 +670,13 @@ def main():
         if needs_changelog:
             logger.info(f"Adresse {address.get('ip')} sans changelog - un changelog factice sera créé après traitement")
         
-        # Traitement normal
         success = process_address(phpipam, powerdns, address)
         
-        # Compter les résultats
         if success:
             success_count += 1
         else:
             error_count += 1
         
-        # Mettre à jour editDate si nécessaire (dans tous les cas)
         if needs_editdate_update:
             update_success = phpipam.update_address_editdate(address.get('id'))
             if update_success:
@@ -682,7 +684,6 @@ def main():
             else:
                 logger.warning(f"Échec mise à jour editDate pour l'adresse {address.get('ip')}")
         
-        # Créer changelog factice si nécessaire (dans tous les cas)
         if needs_changelog:
             changelog_success = phpipam.create_changelog_entry(address.get('id'))
             if changelog_success:
@@ -690,10 +691,8 @@ def main():
             else:
                 logger.warning(f"Échec création changelog factice pour l'adresse {address.get('ip')}")
 
-    # Enregistrer la date actuelle comme dernière vérification
     save_last_check_time(datetime.now())
 
-    # Validation des doublons MAC
     logger.info("=== Validation des doublons MAC ===")
     try:
         mac_success = phpipam.validate_mac_duplicates(notification_callback=notify_mac_duplicate_callback)
@@ -703,6 +702,10 @@ def main():
             logger.error("Erreurs lors de la validation MAC")
     except Exception as e:
         logger.error(f"Exception lors de la validation MAC: {str(e)}")
+
+    # *** STATISTIQUES CACHE EN FIN DE TRAITEMENT ***
+    cache_info = powerdns.get_cache_info()
+    logger.info(f"Statistiques cache DNS: {cache_info}")
 
     logger.info(f"Traitement terminé: {success_count} réussites, {error_count} erreurs")
 

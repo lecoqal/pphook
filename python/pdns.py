@@ -31,6 +31,8 @@ import json
 logger = logging.getLogger("pphook")
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import time
+import threading
 
 class PowerDNSAPI:
     """Classe pour interagir avec l'API PowerDNS - Version étendue"""
@@ -44,6 +46,125 @@ class PowerDNSAPI:
         self.headers = {
             "X-API-Key": self.api_key,
             "Content-Type": "application/json"
+        }
+        
+        # === CACHE DNS ZONES ===
+        self._zones_cache = None
+        self._zones_cache_time = 0
+        self._zones_cache_ttl = 3600  # 1 heure par défaut
+        self._zones_cache_lock = threading.Lock()  # Thread-safe
+        
+        # Configuration TTL depuis config si disponible
+        if self.config:
+            self._zones_cache_ttl = self.config.getint('cache', 'zones_ttl', fallback=3600)
+        
+        logger.debug(f"Cache DNS initialisé avec TTL={self._zones_cache_ttl}s")
+
+    def _is_cache_valid(self):
+        """Vérifie si le cache est encore valide"""
+        return (self._zones_cache is not None and 
+                time.time() - self._zones_cache_time < self._zones_cache_ttl)
+    
+    def _update_zones_cache(self, force=False):
+        """Met à jour le cache des zones avec thread safety"""
+        with self._zones_cache_lock:
+            # Double-check avec le lock (évite les updates multiples)
+            if not force and self._is_cache_valid():
+                return self._zones_cache
+            
+            logger.debug("Mise à jour du cache DNS zones...")
+            
+            # Appel API PowerDNS original
+            zones_data = self.get_zones()  # Appel de la méthode existante
+            
+            if zones_data:
+                # Nettoyer les noms de zones (enlever le point final)
+                clean_zones = []
+                for zone in zones_data:
+                    name = zone.get("name", "")
+                    if name.endswith('.'):
+                        name = name[:-1]
+                    if name:
+                        clean_zones.append(name.lower())
+                
+                # Mise à jour cache
+                self._zones_cache = clean_zones
+                self._zones_cache_time = time.time()
+                
+                logger.info(f"Cache DNS mis à jour: {len(clean_zones)} zones (TTL={self._zones_cache_ttl}s)")
+                return clean_zones
+            else:
+                logger.error("Échec mise à jour cache DNS - données vides")
+                return []
+
+    def get_existing_zones_cached(self, force_refresh=False):
+        """
+        Version cachée de get_existing_zones()
+        
+        Args:
+            force_refresh (bool): Force le rafraîchissement du cache
+            
+        Returns:
+            list: Liste des noms de zones sans le point final
+        """
+        # Vérifier si le cache est valide
+        if not force_refresh and self._is_cache_valid():
+            logger.debug(f"Cache DNS hit: {len(self._zones_cache)} zones")
+            return self._zones_cache.copy()  # Copie pour éviter modifications externes
+        
+        # Cache invalide ou refresh forcé
+        if force_refresh:
+            logger.debug("Refresh forcé du cache DNS")
+        else:
+            logger.debug("Cache DNS expiré, rechargement...")
+        
+        return self._update_zones_cache(force=force_refresh)
+
+    def get_existing_zones(self):
+        """
+        ANCIENNE méthode conservée pour compatibilité
+        Recommandation: utiliser get_existing_zones_cached() pour de meilleures performances
+        """
+        zones = self.get_zones()
+        # Nettoyer les noms de zones (enlever le point final)
+        clean_zones = []
+        for zone in zones:
+            name = zone.get("name", "")
+            if name.endswith('.'):
+                name = name[:-1]
+            if name:
+                clean_zones.append(name.lower())
+
+        logger.debug(f"Zones existantes (sans cache): {clean_zones}")
+        return clean_zones
+
+    def invalidate_zones_cache(self):
+        """Invalide manuellement le cache des zones"""
+        with self._zones_cache_lock:
+            self._zones_cache = None
+            self._zones_cache_time = 0
+            logger.info("Cache DNS zones invalidé manuellement")
+
+    def get_cache_info(self):
+        """Retourne les informations du cache pour debug/monitoring"""
+        if self._zones_cache is None:
+            return {
+                'status': 'empty',
+                'zones_count': 0,
+                'ttl': self._zones_cache_ttl,
+                'age': 0,
+                'expires_in': 0
+            }
+        
+        age = time.time() - self._zones_cache_time
+        expires_in = max(0, self._zones_cache_ttl - age)
+        
+        return {
+            'status': 'valid' if self._is_cache_valid() else 'expired',
+            'zones_count': len(self._zones_cache),
+            'ttl': self._zones_cache_ttl,
+            'age': round(age, 2),
+            'expires_in': round(expires_in, 2)
         }
     
     def _create_session(self):
