@@ -386,6 +386,7 @@ class PhpIPAMAPI:
     def remove_mac_from_address(self, address_id):
         """
         Supprime la MAC d'une adresse dans phpIPAM
+        CORRIGÉ: Gestion robuste des réponses vides/non-JSON
         
         Args:
             address_id (str): ID de l'adresse
@@ -410,17 +411,29 @@ class PhpIPAMAPI:
             
             response = self.session.patch(address_url, headers=headers, json=payload)
             
-            logger.debug(f"Suppression MAC - Requête: {payload}")
-            logger.debug(f"Réponse: {response.status_code} - {response.text}")
+            logger.debug(f"Suppression MAC - Status: {response.status_code}")
+            logger.debug(f"Suppression MAC - Raw response: '{response.text}'")
             
+            # *** CORRECTION: Gestion robuste des réponses ***
             if response.status_code == 200:
-                result = response.json()
-                if result.get("success"):
-                    logger.info(f"MAC supprimée avec succès pour l'adresse ID {address_id}")
+                response_text = response.text.strip()
+                
+                if not response_text:
+                    logger.info(f"MAC supprimée avec succès pour l'adresse ID {address_id} (réponse vide)")
                     return True
-                else:
-                    logger.error(f"Échec suppression MAC pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
-                    return False
+                
+                try:
+                    result = response.json()
+                    if result.get("success", True):
+                        logger.info(f"MAC supprimée avec succès pour l'adresse ID {address_id}")
+                        return True
+                    else:
+                        logger.error(f"Échec suppression MAC pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
+                        return False
+                except ValueError:
+                    # Réponse non-JSON mais status 200 = probablement succès
+                    logger.info(f"MAC probablement supprimée avec succès pour l'adresse ID {address_id}")
+                    return True
             else:
                 logger.error(f"Erreur HTTP lors de la suppression MAC: {response.status_code} - {response.text}")
                 return False
@@ -679,6 +692,7 @@ class PhpIPAMAPI:
             else:
                 new_note = (current_note + marker).strip()
             
+            # Payload JSON
             payload = {"note": new_note}
             
             # Headers avec Content-Type JSON
@@ -688,19 +702,35 @@ class PhpIPAMAPI:
             }
             
             response = self.session.patch(address_url, headers=patch_headers, json=payload)
+            
             logger.debug(f"Requête PATCH: {address_url}")
-            logger.debug(f"Headers: {patch_headers}")
             logger.debug(f"Payload: {payload}")
-            logger.debug(f"Réponse API phpIPAM: {response.text}")
+            logger.debug(f"Status: {response.status_code}")
+            logger.debug(f"Raw response: '{response.text}'")
             
             if response.status_code == 200:
-                result = response.json()
-                if result.get("success"):
-                    logger.info(f"editDate mis à jour automatiquement pour l'adresse ID {address_id}")
+                # Vérifier si la réponse contient du JSON
+                response_text = response.text.strip()
+                
+                if not response_text:
+                    # Réponse vide = succès pour certaines APIs
+                    logger.info(f"editDate mis à jour avec succès pour l'adresse ID {address_id} (réponse vide)")
                     return True
-                else:
-                    logger.error(f"Échec mise à jour pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
-                    return False
+                
+                try:
+                    result = response.json()
+                    if result.get("success", True):  # Default True si pas de champ success
+                        logger.info(f"editDate mis à jour avec succès pour l'adresse ID {address_id}")
+                        return True
+                    else:
+                        logger.error(f"Échec mise à jour pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
+                        return False
+                except ValueError as json_error:
+                    # Réponse non-JSON mais status 200 = probablement succès
+                    logger.warning(f"Réponse non-JSON mais status 200 pour adresse {address_id}: {json_error}")
+                    logger.info(f"editDate probablement mis à jour avec succès pour l'adresse ID {address_id}")
+                    return True
+                    
             else:
                 logger.error(f"Erreur HTTP lors de la mise à jour: {response.status_code} - {response.text}")
                 return False
@@ -747,25 +777,47 @@ class PhpIPAMAPI:
                 "Content-Type": "application/json"
             }
             
+            # *** FONCTION HELPER POUR GÉRER LES RÉPONSES ***
+            def handle_patch_response(response, operation_name):
+                logger.debug(f"{operation_name} - Status: {response.status_code}")
+                logger.debug(f"{operation_name} - Raw response: '{response.text}'")
+                
+                if response.status_code == 200:
+                    response_text = response.text.strip()
+                    
+                    if not response_text:
+                        logger.debug(f"{operation_name} - Réponse vide (succès)")
+                        return True
+                    
+                    try:
+                        result = response.json()
+                        if result.get("success", True):
+                            logger.debug(f"{operation_name} - Succès JSON")
+                            return True
+                        else:
+                            logger.warning(f"{operation_name} - Échec: {result.get('message', 'Erreur inconnue')}")
+                            return False
+                    except ValueError:
+                        # Réponse non-JSON mais status 200 = probablement succès
+                        logger.debug(f"{operation_name} - Réponse non-JSON mais status 200 (succès probable)")
+                        return True
+                else:
+                    logger.warning(f"{operation_name} - Erreur HTTP: {response.status_code} - {response.text}")
+                    return False
+            
             # 3. Première modification pour déclencher changelog
             payload1 = {"excludePing": new_exclude}
             response1 = self.session.patch(address_url, headers=patch_headers, json=payload1)
             
-            logger.debug(f"Première requête PATCH: {payload1}")
-            logger.debug(f"Réponse 1: {response1.status_code} - {response1.text}")
-            
-            if response1.status_code != 200:
-                logger.error(f"Échec première modification pour changelog adresse {address_id}: {response1.status_code} - {response1.text}")
+            if not handle_patch_response(response1, "Première modification"):
+                logger.error(f"Échec première modification pour changelog adresse {address_id}")
                 return False
             
             # 4. Remettre la valeur originale (deuxième entrée changelog)
             payload2 = {"excludePing": current_exclude}
             response2 = self.session.patch(address_url, headers=patch_headers, json=payload2)
             
-            logger.debug(f"Deuxième requête PATCH: {payload2}")
-            logger.debug(f"Réponse 2: {response2.status_code} - {response2.text}")
-            
-            if response2.status_code != 200:
+            if not handle_patch_response(response2, "Remise en état"):
                 logger.warning(f"Échec remise en état pour adresse {address_id}, mais changelog créé")
                 # On considère que c'est un succès car le changelog est créé
             
