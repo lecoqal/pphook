@@ -22,7 +22,6 @@ Ce script:
 
 Auteur: Lecoq Alexis
 Date: 06/05/25
-Version: 2.0
 """
 
 # =================================================
@@ -147,7 +146,7 @@ def validate_hostname(hostname):
 
         # Vérifier le format avec une expression régulière
         if not HOSTNAME_PATTERN.match(hostname):
-            return False, f"Le nom d'hôte ne respecte pas le format requis (doit se terminer par .kreizenn.bzh)"
+            return False, f"Le nom d'hôte ne respecte pas le format requis"
 
         return True, "Nom d'hôte valide"
     except Exception as e:
@@ -323,7 +322,6 @@ def notify_mac_duplicate_callback(duplicate_info):
 def process_address(phpipam, powerdns, address):
     """
     Fonction principale de traitement d'une adresse
-    CORRIGÉE : Logique de gestion des doublons améliorée
     """
     logger.info(f"Traitement de l'adresse IP {address.get('ip')} ({address.get('hostname')})")
 
@@ -335,8 +333,7 @@ def process_address(phpipam, powerdns, address):
         if not GENERIC_EMAIL or GENERIC_EMAIL.strip() == "":
             logger.error(f"Email générique non configuré - impossible de notifier l'erreur pour {address.get('id')}")
             return False
-        logger.warning(f"Pas de changelog pour l'adresse {address.get('id')}")
-        logger.info(f"Utilisation de l'email générique ({GENERIC_EMAIL})")
+        logger.warning(f"Pas de changelog pour l'adresse {address.get('id')}, Utilisation de l'email générique ({GENERIC_EMAIL})")
         user_email = GENERIC_EMAIL
         username = "Utilisateur inconnu"
         use_generic_email = True
@@ -459,7 +456,7 @@ def process_address(phpipam, powerdns, address):
     # Utilisation du cache DNS
     existing_zones = powerdns.get_existing_zones_cached()
     
-    # Log pour debug/monitoring du cache (optionnel)
+    # Log pour debug/monitoring du cache
     cache_info = powerdns.get_cache_info()
     logger.debug(f"Cache DNS: {cache_info['status']}, {cache_info['zones_count']} zones, expire dans {cache_info['expires_in']}s")
 
@@ -523,9 +520,7 @@ def process_address(phpipam, powerdns, address):
         success, corrected, error_msg = powerdns.verify_record_consistency(
             fqdn, 
             address.get('ip'), 
-            error_callback=lambda msg: notify_error(address, hostname, address.get('ip'), msg, 
-                                                   username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
-        )
+            error_callback=lambda msg: notify_error(address, hostname, address.get('ip'), msg,  username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email))
         
         if not success:
             result = False
@@ -571,6 +566,11 @@ def validate_address_data(address):
     hostname_valid, hostname_message = validate_hostname(address.get('hostname'))
     if not hostname_valid:
         return False, hostname_message
+    
+    # Valider le subnet
+    subnet_valid, subnet_message = validate_subnet_ip(address.get('subnetId'))
+    if not subnet_valid:
+        return False, subnet_message
 
     return True, "Données valides"
 
@@ -581,7 +581,7 @@ def validate_address_data(address):
 # =================================================
 
 def get_last_check_time():
-    """Récupère la date de la dernière vérification - Version simplifiée"""
+    """Récupère la date de la dernière vérification"""
     default_time = datetime.now() - timedelta(days=1)
     
     # Si pas de fichier, utiliser défaut
@@ -616,7 +616,6 @@ def get_last_check_time():
 def save_last_check_time(check_time):
     """
     Enregistre la date de la dernière vérification
-    Format amélioré et plus robuste
     """
     try:
         os.makedirs(os.path.dirname(LAST_CHECK_FILE), exist_ok=True)
@@ -676,7 +675,7 @@ def main():
 
     last_check = get_last_check_time()
 
-    # *** PRÉCHARGEMENT DU CACHE DNS ***
+    # Préchargement du cache DNS
     logger.info("Préchargement du cache DNS zones...")
     zones = powerdns.get_existing_zones_cached(force_refresh=True)
     logger.info(f"Cache DNS initialisé avec {len(zones)} zones")
@@ -701,10 +700,8 @@ def main():
         
         success = process_address(phpipam, powerdns, address)
         
-        if success:
-            success_count += 1
-        else:
-            error_count += 1
+        if success: success_count += 1
+        else: error_count += 1
         
         if needs_editdate_update:
             update_success = phpipam.update_address_editdate(address.get('id'))
@@ -732,7 +729,7 @@ def main():
     except Exception as e:
         logger.error(f"Exception lors de la validation MAC: {str(e)}")
 
-    # *** STATISTIQUES CACHE EN FIN DE TRAITEMENT ***
+    # Statistiques cache en fin de traitement
     cache_info = powerdns.get_cache_info()
     logger.info(f"Statistiques cache DNS: {cache_info}")
 
