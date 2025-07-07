@@ -388,20 +388,30 @@ class PhpIPAMAPI:
         Supprime la MAC d'une adresse dans phpIPAM
         
         Args:
-            phpipam (PhpIPAMAPI): Instance de l'API phpIPAM
             address_id (str): ID de l'adresse
             
         Returns:
             bool: True si la suppression a réussi, False sinon
         """
         try:
+            if not self.ensure_auth():
+                return False
+                
             # URL pour modifier une adresse
             address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
             
-            headers = {"token": self.token}
-            data = {"mac": ""}  # Vider le champ MAC
+            # Headers avec Content-Type JSON
+            headers = {
+                "token": self.token,
+                "Content-Type": "application/json"
+            }
             
-            response = self.session.patch(address_url, headers=headers, data=data)
+            payload = {"mac": ""}  # Vider le champ MAC
+            
+            response = self.session.patch(address_url, headers=headers, json=payload)
+            
+            logger.debug(f"Suppression MAC - Requête: {payload}")
+            logger.debug(f"Réponse: {response.status_code} - {response.text}")
             
             if response.status_code == 200:
                 result = response.json()
@@ -412,7 +422,7 @@ class PhpIPAMAPI:
                     logger.error(f"Échec suppression MAC pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
                     return False
             else:
-                logger.error(f"Erreur HTTP lors de la suppression MAC: {response.status_code}")
+                logger.error(f"Erreur HTTP lors de la suppression MAC: {response.status_code} - {response.text}")
                 return False
                 
         except Exception as e:
@@ -661,7 +671,6 @@ class PhpIPAMAPI:
             current_note = address_data.get('note', '') or ''
             
             # Ajouter un marqueur invisible pour forcer la mise à jour
-            # On utilise un caractère spécial qui ne change pas l'apparence
             marker = " [PPHOOK-UPDATE]"
             
             # Si le marqueur existe déjà, on l'enlève, sinon on l'ajoute
@@ -670,22 +679,30 @@ class PhpIPAMAPI:
             else:
                 new_note = (current_note + marker).strip()
             
-            # Modifier le champ note pour déclencher la mise à jour d'editDate
-            data = {"note": new_note}
+            payload = {"note": new_note}
             
-            response = self.session.patch(address_url, headers=headers, data=data)
-            logger.info(f"Réponse API phpIPAM: {response.text}")  # Pour debug
+            # Headers avec Content-Type JSON
+            patch_headers = {
+                "token": self.token,
+                "Content-Type": "application/json"
+            }
+            
+            response = self.session.patch(address_url, headers=patch_headers, json=payload)
+            logger.debug(f"Requête PATCH: {address_url}")
+            logger.debug(f"Headers: {patch_headers}")
+            logger.debug(f"Payload: {payload}")
+            logger.debug(f"Réponse API phpIPAM: {response.text}")
             
             if response.status_code == 200:
                 result = response.json()
                 if result.get("success"):
-                    logger.info(f"editDate mis à jour automatiquement pour l'adresse ID {address_id} (modification du champ note)")
+                    logger.info(f"editDate mis à jour automatiquement pour l'adresse ID {address_id}")
                     return True
                 else:
                     logger.error(f"Échec mise à jour pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
                     return False
             else:
-                logger.error(f"Erreur HTTP lors de la mise à jour: {response.status_code}")
+                logger.error(f"Erreur HTTP lors de la mise à jour: {response.status_code} - {response.text}")
                 return False
                 
         except Exception as e:
@@ -724,17 +741,29 @@ class PhpIPAMAPI:
             
             logger.debug(f"Création changelog pour adresse {address_id}: excludePing {current_exclude} -> {new_exclude}")
             
+            # Headers avec Content-Type JSON
+            patch_headers = {
+                "token": self.token,
+                "Content-Type": "application/json"
+            }
+            
             # 3. Première modification pour déclencher changelog
-            data = {"excludePing": new_exclude}
-            response1 = self.session.patch(address_url, headers=headers, data=data)
+            payload1 = {"excludePing": new_exclude}
+            response1 = self.session.patch(address_url, headers=patch_headers, json=payload1)
+            
+            logger.debug(f"Première requête PATCH: {payload1}")
+            logger.debug(f"Réponse 1: {response1.status_code} - {response1.text}")
             
             if response1.status_code != 200:
-                logger.error(f"Échec première modification pour changelog adresse {address_id}: {response1.status_code}")
+                logger.error(f"Échec première modification pour changelog adresse {address_id}: {response1.status_code} - {response1.text}")
                 return False
             
             # 4. Remettre la valeur originale (deuxième entrée changelog)
-            data = {"excludePing": current_exclude}
-            response2 = self.session.patch(address_url, headers=headers, data=data)
+            payload2 = {"excludePing": current_exclude}
+            response2 = self.session.patch(address_url, headers=patch_headers, json=payload2)
+            
+            logger.debug(f"Deuxième requête PATCH: {payload2}")
+            logger.debug(f"Réponse 2: {response2.status_code} - {response2.text}")
             
             if response2.status_code != 200:
                 logger.warning(f"Échec remise en état pour adresse {address_id}, mais changelog créé")
