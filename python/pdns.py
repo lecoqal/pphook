@@ -29,6 +29,8 @@ import logging
 import ipaddress
 import json
 logger = logging.getLogger("pphook")
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 class PowerDNSAPI:
     """Classe pour interagir avec l'API PowerDNS - Version étendue"""
@@ -38,10 +40,45 @@ class PowerDNSAPI:
         self.api_key = api_key
         self.server = server
         self.config = config
+        self.session = self._create_session()
         self.headers = {
             "X-API-Key": self.api_key,
             "Content-Type": "application/json"
         }
+    
+    def _create_session(self):
+        """Crée une session avec pool de connexions et retry automatique"""
+        session = requests.Session()
+        
+        # Configuration du retry automatique pour PowerDNS
+        retry_strategy = Retry(
+            total=3,                    # 3 tentatives max
+            backoff_factor=0.3,         # Délai plus court pour PowerDNS (0.3, 0.6, 1.2 sec)
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST", "PATCH"]
+        )
+        
+        # Adaptateur HTTP avec retry
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=8,         # Pool plus petit pour PowerDNS
+            pool_maxsize=15            # Max 15 connexions par host
+        )
+        
+        # Appliquer l'adaptateur
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        # Timeout optimisé pour PowerDNS (généralement plus rapide)
+        session.timeout = (3, 20)  # (connect_timeout, read_timeout)
+        
+        # Headers par défaut
+        session.headers.update({
+            'User-Agent': 'PPHOOK-PowerDNS/2.0',
+            'Accept': 'application/json'
+        })
+        
+        return session
     
     def get_zones(self):
         """
@@ -54,7 +91,7 @@ class PowerDNSAPI:
         zones_url = f"{self.api_url}/servers/{self.server}/zones"
         
         try:
-            response = requests.get(zones_url, headers=self.headers)
+            response = self.session.get(zones_url, headers=self.headers)
             
             if response.status_code == 200:
                 zones = response.json()
@@ -74,15 +111,7 @@ class PowerDNSAPI:
             return []
     
     def get_zone(self, zone_name):
-        """
-        Récupère une zone spécifique par son nom
-        
-        Args:
-            zone_name (str): Nom de la zone à récupérer
-            
-        Returns:
-            dict: Données de la zone ou None si non trouvée
-        """
+        """Récupère une zone spécifique par son nom"""
         # S'assurer que zone_name se termine par un point
         if not zone_name.endswith('.'):
             zone_name = f"{zone_name}."
@@ -90,7 +119,7 @@ class PowerDNSAPI:
         zone_url = f"{self.api_url}/servers/{self.server}/zones/{zone_name}"
         
         try:
-            response = requests.get(zone_url, headers=self.headers)
+            response = self.session.get(zone_url, headers=self.headers)
             
             if response.status_code == 200:
                 return response.json()
@@ -128,16 +157,7 @@ class PowerDNSAPI:
         return None
             
     def ensure_zone_exists(self, zone_name):
-        """
-        Vérifie si une zone existe en utilisant l'API PowerDNS.
-        Implémentation robuste qui gère les erreurs spécifiquement.
-        
-        Args:
-            zone_name (str): Nom de la zone à vérifier
-            
-        Returns:
-            bool: True si la zone existe, False sinon
-        """
+        """Vérifie si une zone existe en utilisant l'API PowerDNS"""
         # S'assurer que zone_name se termine par un point
         if not zone_name.endswith('.'):
             zone_name = f"{zone_name}."
@@ -145,7 +165,8 @@ class PowerDNSAPI:
         zone_url = f"{self.api_url}/servers/{self.server}/zones/{zone_name}"
         
         try:
-            response = requests.get(zone_url, headers=self.headers)
+            # UTILISER self.session
+            response = self.session.get(zone_url, headers=self.headers)
             
             # 200 OK = zone existe
             if response.status_code == 200:
@@ -157,7 +178,6 @@ class PowerDNSAPI:
                 return False
                 
             # 422 UNPROCESSABLE ENTITY = généralement un problème de format
-            # PowerDNS peut renvoyer 422 si le format de la zone est incorrect
             elif response.status_code == 422:
                 logger.debug(f"Format de zone incorrect pour {zone_name}")
                 return False
@@ -174,10 +194,7 @@ class PowerDNSAPI:
             return False
 
     def create_record(self, zone_name, record_name, record_type, content, ttl=3600):
-        """
-        Crée ou met à jour un enregistrement DNS
-        Version corrigée pour gérer le bug "Changetype not understood"
-        """
+        """Crée ou met à jour un enregistrement DNS"""
         # Vérifier que la zone existe
         if not self.ensure_zone_exists(zone_name):
             logger.error(f"La zone {zone_name} n'existe pas, impossible de créer l'enregistrement")
@@ -195,7 +212,7 @@ class PowerDNSAPI:
         # Vérifier si l'enregistrement existe déjà
         existing_record = self.get_record(zone_name, record_name, record_type)
         
-        changetype = "REPLACE"  # Utiliser REPLACE par défaut car c'est généralement plus sûr
+        changetype = "REPLACE"  # Utiliser REPLACE par défaut
         
         # Si l'enregistrement existe et a déjà le bon contenu, ne rien faire
         if existing_record:
@@ -228,7 +245,8 @@ class PowerDNSAPI:
         }
         
         try:
-            response = requests.patch(zone_url, headers=self.headers, json=data)
+            # UTILISER self.session
+            response = self.session.patch(zone_url, headers=self.headers, json=data)
             if response.status_code in [200, 204]:
                 logger.info(f"Enregistrement {record_name} ({record_type}) créé/mis à jour avec succès dans la zone {zone_name}")
                 return True
@@ -242,7 +260,7 @@ class PowerDNSAPI:
                     data["rrsets"][0].pop("changetype", None)
                     
                     try:
-                        response = requests.patch(zone_url, headers=self.headers, json=data)
+                        response = self.session.patch(zone_url, headers=self.headers, json=data)
                         if response.status_code in [200, 204]:
                             logger.info(f"Enregistrement {record_name} ({record_type}) créé/mis à jour avec succès dans la zone {zone_name}")
                             return True
@@ -283,7 +301,8 @@ class PowerDNSAPI:
         }
         
         try:
-            response = requests.patch(zone_url, headers=self.headers, json=data)
+            # UTILISER self.session
+            response = self.session.patch(zone_url, headers=self.headers, json=data)
             if response.status_code == 204:
                 logger.info(f"Enregistrement {record_name} ({record_type}) supprimé avec succès de la zone {zone_name}")
                 return True
@@ -746,3 +765,12 @@ class PowerDNSAPI:
 
         logger.info(f"Correction réussie des enregistrements DNS pour {fqdn_with_dot} ({ip})")
         return True, True, None
+    
+    def close(self):
+        """Ferme proprement la session"""
+        if hasattr(self, 'session'):
+            self.session.close()
+    
+    def __del__(self):
+        """Destructeur pour fermer la session automatiquement"""
+        self.close()

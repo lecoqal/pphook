@@ -25,6 +25,8 @@ import logging
 import importlib
 from datetime import datetime, timedelta
 import ipaddress
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Import explicite du module datetime standard
 std_datetime = importlib.import_module('datetime')
@@ -44,6 +46,42 @@ class PhpIPAMAPI:
         self.config = config
         self.token = None
         self.token_expires = datetime.now()
+        self.session = self._create_session()
+    
+    def _create_session(self):
+        """Crée une session avec pool de connexions et retry automatique"""
+        session = requests.Session()
+        
+        # Configuration du retry automatique
+        retry_strategy = Retry(
+            total=3,                    # 3 tentatives max
+            backoff_factor=0.5,         # Délai entre tentatives (0.5, 1.0, 2.0 sec)
+            status_forcelist=[429, 500, 502, 503, 504],  # Codes d'erreur à retenter
+            allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST", "PATCH"]
+        )
+        
+        # Adaptateur HTTP avec retry
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=10,        # Pool de 10 connexions
+            pool_maxsize=20            # Max 20 connexions par host
+        )
+        
+        # Appliquer l'adaptateur aux protocoles HTTP et HTTPS
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        # Timeout par défaut pour toutes les requêtes
+        session.timeout = (5, 30)  # (connect_timeout, read_timeout)
+        
+        # Headers par défaut
+        session.headers.update({
+            'User-Agent': 'PPHOOK/2.0',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        })
+        
+        return session
 
     def authenticate(self):
         """Authentification à l'API phpIPAM"""
@@ -53,7 +91,7 @@ class PhpIPAMAPI:
         headers = {"Authorization": f"Basic {auth_header}"}
         
         try:
-            response = requests.post(auth_url, headers=headers)
+            response = self.session.post(auth_url, headers=headers)
             response.raise_for_status()
             
             data = response.json()
@@ -90,7 +128,8 @@ class PhpIPAMAPI:
         params = {}
 
         try:
-            response = requests.get(addresses_url, headers=headers, params=params)
+            # UTILISER self.session au lieu de requests
+            response = self.session.get(addresses_url, headers=headers, params=params)
             response.raise_for_status()
 
             data = response.json()
@@ -155,7 +194,7 @@ class PhpIPAMAPI:
         headers = {"token": self.token}
         
         try:
-            response = requests.get(subnets_url, headers=headers)
+            response = self.session.get(subnets_url, headers=headers)
             response.raise_for_status()
 
             data = response.json()
@@ -179,7 +218,7 @@ class PhpIPAMAPI:
         headers = {"token": self.token}
         
         try:
-            response = requests.get(subnet_url, headers=headers)
+            response = self.session.get(subnet_url, headers=headers)
             response.raise_for_status()
             
             data = response.json()
@@ -202,7 +241,7 @@ class PhpIPAMAPI:
         headers = {"token": self.token}
         
         try:
-            response = requests.get(section_url, headers=headers)
+            response = self.session.get(section_url, headers=headers)
             response.raise_for_status()
             
             data = response.json()
@@ -234,7 +273,7 @@ class PhpIPAMAPI:
         params = {"limit": limit}
         
         try:
-            response = requests.get(changelog_url, headers=headers, params=params)
+            response = self.session.get(changelog_url, headers=headers, params=params)
             response.raise_for_status()
             
             data = response.json()
@@ -265,7 +304,7 @@ class PhpIPAMAPI:
         headers = {"token": self.token}
         
         try:
-            response = requests.get(changelog_url, headers=headers)
+            response = self.session.get(changelog_url, headers=headers)
             response.raise_for_status()
             
             data = response.json()
@@ -362,7 +401,7 @@ class PhpIPAMAPI:
             headers = {"token": self.token}
             data = {"mac": ""}  # Vider le champ MAC
             
-            response = requests.patch(address_url, headers=headers, data=data)
+            response = self.session.patch(address_url, headers=headers, data=data)
             
             if response.status_code == 200:
                 result = response.json()
@@ -551,7 +590,7 @@ class PhpIPAMAPI:
             
             # Supprimer
             url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
-            response = requests.delete(url, headers={"token": self.token})
+            response = self.session.delete(url, headers={"token": self.token})
             
             return response.status_code == 200 and response.json().get("success", False)
             
@@ -565,7 +604,7 @@ class PhpIPAMAPI:
             return []
         
         try:
-            response = requests.get(f"{self.api_url}/{self.app_id}/user/all/", headers={"token": self.token})
+            response = self.session.get(f"{self.api_url}/{self.app_id}/user/all/", headers={"token": self.token})
             return response.json()["data"]
         except:
             return []
@@ -613,7 +652,7 @@ class PhpIPAMAPI:
             headers = {"token": self.token}
             
             # GET pour récupérer l'adresse
-            get_response = requests.get(address_url, headers=headers)
+            get_response = self.session.get(address_url, headers=headers)
             if get_response.status_code != 200:
                 logger.error(f"Impossible de récupérer l'adresse {address_id}")
                 return False
@@ -634,7 +673,7 @@ class PhpIPAMAPI:
             # Modifier le champ note pour déclencher la mise à jour d'editDate
             data = {"note": new_note}
             
-            response = requests.patch(address_url, headers=headers, data=data)
+            response = self.session.patch(address_url, headers=headers, data=data)
             logger.info(f"Réponse API phpIPAM: {response.text}")  # Pour debug
             
             if response.status_code == 200:
@@ -672,7 +711,7 @@ class PhpIPAMAPI:
             address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
             headers = {"token": self.token}
             
-            get_response = requests.get(address_url, headers=headers)
+            get_response = self.session.get(address_url, headers=headers)
             if get_response.status_code != 200:
                 logger.error(f"Impossible de récupérer l'adresse {address_id} pour créer changelog")
                 return False
@@ -687,7 +726,7 @@ class PhpIPAMAPI:
             
             # 3. Première modification pour déclencher changelog
             data = {"excludePing": new_exclude}
-            response1 = requests.patch(address_url, headers=headers, data=data)
+            response1 = self.session.patch(address_url, headers=headers, data=data)
             
             if response1.status_code != 200:
                 logger.error(f"Échec première modification pour changelog adresse {address_id}: {response1.status_code}")
@@ -695,7 +734,7 @@ class PhpIPAMAPI:
             
             # 4. Remettre la valeur originale (deuxième entrée changelog)
             data = {"excludePing": current_exclude}
-            response2 = requests.patch(address_url, headers=headers, data=data)
+            response2 = self.session.patch(address_url, headers=headers, data=data)
             
             if response2.status_code != 200:
                 logger.warning(f"Échec remise en état pour adresse {address_id}, mais changelog créé")
@@ -707,3 +746,12 @@ class PhpIPAMAPI:
         except Exception as e:
             logger.error(f"Exception lors de la création changelog pour adresse {address_id}: {str(e)}")
             return False
+        
+    def close(self):
+        """Ferme proprement la session"""
+        if hasattr(self, 'session'):
+            self.session.close()
+    
+    def __del__(self):
+        """Destructeur pour fermer la session automatiquement"""
+        self.close()

@@ -629,6 +629,9 @@ def main():
     """Fonction principale"""
     logger.info("Démarrage du script d'intégration phpIPAM-PowerDNS")
 
+    success_count = 0
+    error_count = 0
+
     # Initialiser les clients API
     phpipam = ipam(PHPIPAM_URL, PHPIPAM_APP_ID, PHPIPAM_USERNAME, PHPIPAM_PASSWORD, config=CONFIG)
     powerdns = pdns(POWERDNS_URL, POWERDNS_API_KEY, POWERDNS_SERVER, config=CONFIG)
