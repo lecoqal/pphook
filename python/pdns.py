@@ -887,6 +887,93 @@ class PowerDNSAPI:
         logger.info(f"Correction réussie des enregistrements DNS pour {fqdn_with_dot} ({ip})")
         return True, True, None
     
+    def validate_and_cleanup_hostname(self, hostname, ip):
+        """
+        Valide un hostname contre les zones existantes et nettoie si invalide
+        
+        Args:
+            hostname (str): Hostname à valider
+            ip (str): IP associée
+            
+        Returns:
+            tuple: (is_valid, error_message, cleanup_success)
+        """
+        existing_zones = self.get_existing_zones_cached()
+        is_valid, domain, error = self.validate_hostname_domain(hostname, existing_zones)
+        
+        if is_valid:
+            return True, None, True
+        
+        # Hostname invalide, nettoyer les enregistrements existants
+        logger.warning(f"Hostname invalide '{hostname}': {error}")
+        
+        # Nettoyer PTR
+        ptr_name = self.get_ptr_name_from_ip(ip)
+        reverse_zone = self.get_reverse_zone_from_ip(ip)
+        ptr_exists = self.ensure_zone_exists(reverse_zone) and self.get_record(reverse_zone, ptr_name, "PTR")
+        
+        # Chercher d'éventuels enregistrements A dans toutes les zones
+        a_records_found = []
+        for zone in existing_zones:
+            zone_with_dot = f"{zone}."
+            if self.ensure_zone_exists(zone_with_dot):
+                a_record = self.get_record(zone_with_dot, f"{hostname}.", "A")
+                if a_record:
+                    a_records_found.append((zone_with_dot, f"{hostname}."))
+        
+        cleanup_success = True
+        
+        # Supprimer le PTR si nécessaire
+        if ptr_exists:
+            logger.info(f"Suppression du PTR invalide pour {ip}")
+            if not self.delete_record(reverse_zone, ptr_name, "PTR"):
+                cleanup_success = False
+        
+        # Supprimer les enregistrements A trouvés
+        for zone, record_name in a_records_found:
+            logger.info(f"Suppression de l'enregistrement A invalide {record_name} dans la zone {zone}")
+            if not self.delete_record(zone, record_name, "A"):
+                cleanup_success = False
+        
+        return False, error, cleanup_success
+
+    def process_dns_consistency(self, hostname, ip, error_callback=None):
+        """
+        Traite la cohérence DNS selon l'état des enregistrements A/PTR
+        
+        Args:
+            hostname (str): Hostname complet
+            ip (str): Adresse IP
+            error_callback (callable): Callback pour les erreurs
+            
+        Returns:
+            tuple: (success, corrected, error_message)
+        """
+        dns_status = self.check_dns_records_status(hostname, ip)
+        
+        if dns_status == 'no_records':
+            logger.info(f"Aucun enregistrement DNS pour {hostname} ({ip}), aucune action nécessaire")
+            return True, False, None
+        
+        elif dns_status == 'ptr_only':
+            success = self.handle_orphaned_ptr(hostname, ip)
+            return success, success, None if success else f"Échec suppression PTR orphelin pour {hostname}"
+        
+        elif dns_status == 'a_only':
+            success = self.create_missing_ptr(hostname, ip)
+            return success, success, None if success else f"Échec création PTR pour {hostname}"
+        
+        elif dns_status == 'both_exist':
+            success, corrected, error_msg = self.verify_record_consistency(hostname, ip, error_callback)
+            if corrected and error_callback:
+                error_callback("Enregistrements DNS incohérents corrigés automatiquement")
+            return success, corrected, error_msg
+        
+        else:
+            error_msg = f"État DNS inconnu: {dns_status}"
+            logger.error(error_msg)
+            return False, False, error_msg
+    
     def close(self):
         """Ferme proprement la session"""
         if hasattr(self, 'session'):

@@ -320,219 +320,127 @@ def notify_mac_duplicate_callback(duplicate_info):
 # =================================================
 
 def process_address(phpipam, powerdns, address, users):
-    """
-    Fonction principale de traitement d'une adresse
-    """
+    """Fonction principale de traitement d'une adresse"""
     logger.info(f"Traitement de l'adresse IP {address.get('ip')} ({address.get('hostname')})")
 
-    # Initialiser les variables pour adresse
+    # === RÉCUPÉRATION CHANGELOG ===
     changelog = None
-    username = None
-    user_email = None
-    use_generic_email = False
-    edit_date = "Date inconnue"
-    action = "Action inconnue"
-
-    # Informations Utilisateur
     try:
-        # Récupérer le changelog de l'adresse
         changelog = phpipam.get_address_changelog(address.get('id'))
-        if changelog and len(changelog) > 0:
-                last_change = changelog[-1]
-                real_name = last_change["user"]
-                edit_date = last_change.get('date', 'Date inconnue')
-                action = last_change.get('action', 'Action inconnue')
-        # Trouver l'email
-        for user in users:
-            if user["real_name"] == real_name:
-                user_email, username = user["email"], real_name
-
     except Exception as e:
-        logger.error(f"Erreur récupération changelog pour l'adresse {address.get('ip')}: {str(e)}")
-        changelog = None
-        if not GENERIC_EMAIL or GENERIC_EMAIL.strip() == "":
-            logger.error(f"Email générique non configuré - impossible de notifier l'erreur pour {address.get('id')}")
-            return False
-        logger.warning(f"Pas de changelog pour l'adresse {address.get('id')}, Utilisation de l'email générique ({GENERIC_EMAIL})")
-        user_email = GENERIC_EMAIL
-        username = "Utilisateur inconnu"
-        use_generic_email = True
+        logger.debug(f"Impossible de récupérer changelog pour {address.get('id')}: {e}")
 
-    # Étape 1: Valider les données d'entrée
+    # === INFOS UTILISATEUR DEPUIS CHANGELOG ===
+    user_email, username, use_generic_email = get_user_info_from_changelog(changelog, users)
+    if not user_email:
+        logger.error(f"Email non disponible pour notifier l'erreur pour {address.get('id')}")
+        return False
+    
+    edit_date, action = get_changelog_details(changelog, use_generic_email)
+
+    # === MAINTENANCE DONNÉES (AVANT TRAITEMENT) ===
+    maintenance_editdate = not address.get('editDate') or str(address.get('editDate')).strip() == ""
+    maintenance_changelog = not changelog or len(changelog) == 0
+
+    # === ÉTAPE 1: VALIDATION DONNÉES ===
     valid, error_message = validate_address_data(address)
     if not valid:
         logger.error(f"Données invalides pour l'adresse {address.get('ip')}: {error_message}")
         notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
                     error_message, username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
         return False
-    
-    # Étape 2: Vérifier les doublons hostname
-    has_duplicate, duplicate_address = phpipam.validate_hostname_duplicate({address.get('ip')})
-    if has_duplicate:
-        error_message = f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}."
-        logger.warning(error_message)
-        
-        # Stratégie de résolution des doublons
-        address_to_delete = None
-        resolution_strategy = None
-        
-        # Stratégie 1 : Comparer les dates d'édition si disponibles
-        if not use_generic_email:  # Si l'adresse a un changelog
-            try:
-                # Récupérer le changelog de l'adresse
-                duplicate_address_changelog = phpipam.get_address_changelog(duplicate_address.get('id'))
-                if duplicate_address_changelog and len(duplicate_address_changelog) > 0:
-                        last_change = duplicate_address_changelog[-1]
-                        duplicate_address_edit_date = last_change.get('date', 'Date inconnue')
-                else:
-                    duplicate_address_edit_date = "Date inconnue"
-                
-                # Comparer les dates si on a les deux
-                if edit_date and duplicate_address_edit_date:
-                    if edit_date > duplicate_address_edit_date:
-                        address_to_delete = address
-                        resolution_strategy = f"adresse courante plus récente ({edit_date} > {duplicate_address_edit_date})"
-                    else:
-                        address_to_delete = duplicate_address
-                        resolution_strategy = f"adresse courante plus récente ({duplicate_address_edit_date} > {edit_date})"
-                        
-            except Exception as e:
-                logger.warning(f"Erreur récupération dates pour résolution doublon: {e}")
-        
-        # Stratégie 2 : Fallback sur l'ID (plus petit = plus ancien)
-        if address_to_delete is None:
-            try:
-                current_id = int(address.get('id', 0))
-                duplicate_id = int(duplicate_address.get('id', 0))
-                
-                if current_id > duplicate_id:
-                    address_to_delete = address
-                    resolution_strategy = f"ID plus récent ({current_id} > {duplicate_id})"
-                else:
-                    address_to_delete = duplicate_address
-                    resolution_strategy = f"ID plus ancien ({duplicate_id} >= {current_id})"
-            except Exception as e:
-                logger.warning(f"Erreur comparaison IDs: {e}")
-        
-        # Stratégie 3 : Dernier recours - supprimer l'adresse courante
-        if address_to_delete is None:
-            address_to_delete = address
-            resolution_strategy = "dernier recours (pas de critère de comparaison)"
-        
-        logger.info(f"Résolution doublon hostname: suppression {address_to_delete.get('ip')} (stratégie: {resolution_strategy})")
-        
-        # Supprimer les enregistrements DNS de l'adresse à supprimer
-        hostname_to_delete = address_to_delete.get('hostname')
-        ip_to_delete = address_to_delete.get('ip')
-        
-        if hostname_to_delete and ip_to_delete:
-            logger.info(f"Suppression des enregistrements DNS pour l'hostname dupliqué {hostname_to_delete} ({ip_to_delete})")
-            success, error_msg = powerdns.delete_a_ptr_records(hostname_to_delete, ip_to_delete)
-        
-        # Supprimer l'adresse déterminée comme étant à supprimer
-        phpipam.delete_address(ip_to_delete)
-        
-        # Si c'est l'adresse courante qui est supprimée, on notifie et on retourne False
-        if address_to_delete == address:
-            notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
-                        f"{error_message} Adresse supprimée ({resolution_strategy})", username, edit_date, action, 
-                        duplicate_address, user_email=user_email, use_generic_email=use_generic_email)
-            return False
-        else:
-            logger.info(f"Doublon résolu : adresse {duplicate_address.get('ip')} supprimée, traitement continue pour {address.get('ip')}")
 
-    # Étape 3: Valider les MAC dupliquées
+    # === ÉTAPE 2: RÉSOLUTION DOUBLONS HOSTNAME ===
+    continue_processing, duplicate_error = phpipam.resolve_hostname_duplicate(address, powerdns)
+    if not continue_processing:
+        notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
+                    duplicate_error['message'], username, edit_date, action, 
+                    duplicate_error['duplicate_address'], user_email=user_email, use_generic_email=use_generic_email)
+        return False
+
+    # === ÉTAPE 3: VALIDATION MAC DUPLICATES ===
     try:
         mac_success = phpipam.validate_mac_duplicates(notification_callback=notify_mac_duplicate_callback)
-        if mac_success:
-            logger.info("Validation MAC terminée avec succès")
-        else:
+        if not mac_success:
             logger.error("Erreurs lors de la validation MAC")
     except Exception as e:
         logger.error(f"Erreurs lors de la validation MAC: {str(e)}")
 
-    # Utilisation du cache DNS
-    existing_zones = powerdns.get_existing_zones_cached()
+    # === ÉTAPE 4: VALIDATION HOSTNAME/ZONES ===
+    hostname = address.get('hostname')
+    is_valid, error_message, cleanup_success = powerdns.validate_and_cleanup_hostname(hostname, address.get('ip'))
     
-    # Log pour debug/monitoring du cache
-    cache_info = powerdns.get_cache_info()
-    logger.debug(f"Cache DNS: {cache_info['status']}, {cache_info['zones_count']} zones, expire dans {cache_info['expires_in']}s")
-
-    # Étape 4: Valider que le hostname correspond à une zone existante
-    hostname = {address.get('hostname')}
-    is_valid, domain, error = powerdns.validate_hostname_domain(hostname, existing_zones)
-
-    # Si le hostname n'est pas valide, supprimer les enregistrements existants
     if not is_valid:
-        logger.warning(f"Hostname invalide '{hostname}': {error}")
-
-        ptr_name = powerdns.get_ptr_name_from_ip(address.get('ip'))
-        reverse_zone = powerdns.get_reverse_zone_from_ip(address.get('ip'))
-        ptr_exists = powerdns.ensure_zone_exists(reverse_zone) and powerdns.get_record(reverse_zone, ptr_name, "PTR")
-
-        # Chercher d'éventuels enregistrements A dans toutes les zones
-        a_records_found = []
-        for zone in existing_zones:
-            zone_with_dot = f"{zone}."
-            if powerdns.ensure_zone_exists(zone_with_dot):
-                a_record = powerdns.get_record(zone_with_dot, f"{hostname}.", "A")
-                if a_record:
-                    a_records_found.append((zone_with_dot, f"{hostname}."))
-
-        cleanup_success = True
-
-        if ptr_exists:
-            logger.info(f"Suppression du PTR invalide pour {address.get('ip')}")
-            if not powerdns.delete_record(reverse_zone, ptr_name, "PTR"):
-                cleanup_success = False
-
-        for zone, record_name in a_records_found:
-            logger.info(f"Suppression de l'enregistrement A invalide {record_name} dans la zone {zone}")
-            if not powerdns.delete_record(zone, record_name, "A"):
-                cleanup_success = False
-        
-        notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'), 
-                    error, username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
-
+        notify_error(address, hostname, address.get('ip'), error_message, username, edit_date, action, 
+                    user_email=user_email, use_generic_email=use_generic_email)
         return cleanup_success
 
-    # Si le hostname est valide, continuer avec le traitement normal
-    fqdn = hostname
-    dns_status = powerdns.check_dns_records_status(fqdn, {address.get('ip')})
+    # === ÉTAPE 5: TRAITEMENT COHÉRENCE DNS ===
+    def dns_error_callback(msg):
+        notify_error(address, hostname, address.get('ip'), msg, username, edit_date, action, 
+                    user_email=user_email, use_generic_email=use_generic_email)
 
-    # Étape 5: Traiter selon le cas déterminé
-    result = False
+    success, corrected, error_msg = powerdns.process_dns_consistency(hostname, address.get('ip'), dns_error_callback)
+    
+    if corrected:
+        notify_error(address, hostname, address.get('ip'), 
+                   "Enregistrements DNS incohérents corrigés automatiquement", 
+                   username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
 
-    if dns_status == 'no_records':
-        logger.info(f"Aucun enregistrement DNS pour {fqdn} ({address.get('ip')}), aucune action nécessaire")
-        result = True
-
-    elif dns_status == 'ptr_only':
-        result = powerdns.handle_orphaned_ptr(fqdn, {address.get('ip')})
-
-    elif dns_status == 'a_only':
-        result = powerdns.create_missing_ptr(fqdn, {address.get('ip')})
-
-    elif dns_status == 'both_exist':
-        success, corrected, error_msg = powerdns.verify_record_consistency(
-            fqdn, 
-            {address.get('ip')}, 
-            error_callback=lambda msg: notify_error(address, hostname, {address.get('ip')}, msg,  username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email))
+    # === MAINTENANCE DONNÉES (APRÈS TRAITEMENT RÉUSSI) ===
+    if success:
+        if maintenance_editdate:
+            update_success = phpipam.update_address_editdate(address.get('id'))
+            if update_success:
+                logger.debug(f"editDate mis à jour pour {address.get('ip')}")
+            else:
+                logger.warning(f"Échec mise à jour editDate pour {address.get('ip')}")
         
-        if not success:
-            result = False
-        else:
-            if corrected:
-                notify_error(address, hostname, {address.get('ip')}, 
-                           "Enregistrements DNS incohérents corrigés automatiquement", 
-                           username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
-            result = True
+        if maintenance_changelog:
+            changelog_success = phpipam.create_changelog_entry(address.get('id'))
+            if changelog_success:
+                logger.debug(f"Changelog factice créé pour {address.get('ip')}")
+            else:
+                logger.warning(f"Échec création changelog factice pour {address.get('ip')}")
 
-    else:
-        logger.error(f"État DNS inconnu: {dns_status}")
-        result = False
+    return success
 
-    return result
+def get_user_info_from_changelog(changelog, users):
+    """Récupère les infos utilisateur depuis un changelog déjà récupéré"""
+    if not changelog or len(changelog) == 0:
+        # Fallback sur email générique
+        if GENERIC_EMAIL and GENERIC_EMAIL.strip():
+            return GENERIC_EMAIL, "Utilisateur inconnu", True
+        return None, None, False
+    
+    try:
+        real_name = changelog[-1]["user"]
+        # Trouver l'email dans la liste des users
+        for user in users:
+            if user["real_name"] == real_name:
+                return user["email"], real_name, False
+        
+        # User trouvé dans changelog mais pas dans la liste des users
+        if GENERIC_EMAIL and GENERIC_EMAIL.strip():
+            return GENERIC_EMAIL, real_name, True
+        
+        return None, real_name, False
+        
+    except Exception:
+        if GENERIC_EMAIL and GENERIC_EMAIL.strip():
+            return GENERIC_EMAIL, "Utilisateur inconnu", True
+        return None, None, False
+
+def get_changelog_details(changelog, use_generic_email):
+    """Récupère les détails depuis un changelog déjà récupéré"""
+    if use_generic_email or not changelog or len(changelog) == 0:
+        return "Date inconnue", "Action inconnue"
+    
+    try:
+        last_change = changelog[-1]
+        return last_change.get('date', 'Date inconnue'), last_change.get('action', 'Action inconnue')
+    except Exception:
+        return "Date inconnue", "Action inconnue"
 
 def validate_address_data(address):
     """
@@ -657,7 +565,7 @@ def reset_last_check():
 # =================================================
 
 def main():
-    """Fonction principale MODIFIÉE avec monitoring cache"""
+    """Fonction principale simplifiée"""
     logger.info("Démarrage du script d'intégration phpIPAM-PowerDNS")
 
     success_count = 0
@@ -681,39 +589,10 @@ def main():
     all_users = phpipam.get_all_users()
 
     for address in addresses:
-        needs_editdate_update = not address.get('editDate') or str(address.get('editDate')).strip() == ""
-        
-        needs_changelog = False
-        try:
-            changelog = phpipam.get_address_changelog(address.get('id'))
-            needs_changelog = not changelog or len(changelog) == 0
-        except Exception:
-            needs_changelog = True
-        
-        if needs_editdate_update:
-            logger.info(f"Adresse {address.get('ip')} sans editDate - sera mise à jour après traitement")
-        
-        if needs_changelog:
-            logger.info(f"Adresse {address.get('ip')} sans changelog - un changelog factice sera créé après traitement")
-        
         success = process_address(phpipam, powerdns, address, all_users)
         
         if success: success_count += 1
         else: error_count += 1
-        
-        if needs_editdate_update:
-            update_success = phpipam.update_address_editdate(address.get('id'))
-            if update_success:
-                logger.info(f"editDate mis à jour avec succès pour l'adresse {address.get('ip')} (était NULL/vide)")
-            else:
-                logger.warning(f"Échec mise à jour editDate pour l'adresse {address.get('ip')}")
-        
-        if needs_changelog:
-            changelog_success = phpipam.create_changelog_entry(address.get('id'))
-            if changelog_success:
-                logger.info(f"Changelog factice créé avec succès pour l'adresse {address.get('ip')} (était vide)")
-            else:
-                logger.warning(f"Échec création changelog factice pour l'adresse {address.get('ip')}")
 
     save_last_check_time(datetime.now())
 

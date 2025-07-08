@@ -829,6 +829,102 @@ class PhpIPAMAPI:
         except Exception as e:
             logger.error(f"Exception lors de la création changelog pour adresse {address_id}: {str(e)}")
             return False
+    
+    def resolve_hostname_duplicate(self, address, powerdns_api):
+        """
+        Résout automatiquement les doublons hostname avec stratégie intelligente
+        
+        Args:
+            address (dict): Adresse à traiter
+            powerdns_api: Instance PowerDNS pour suppression DNS
+            
+        Returns:
+            tuple: (continue_processing, error_info)
+                - continue_processing (bool): True si continuer, False si arrêter
+                - error_info (dict): Infos sur l'erreur si duplicate résolu
+        """
+        has_duplicate, duplicate_address = self.validate_hostname_duplicate(address.get('ip'))
+        if not has_duplicate:
+            return True, None
+        
+        logger.warning(f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}.")
+        
+        # Stratégie de résolution des doublons
+        address_to_delete = None
+        resolution_strategy = None
+        
+        # Stratégie 1 : Comparer les dates d'édition si disponibles
+        try:
+            current_edit_date = address.get('editDate')
+            duplicate_edit_date = duplicate_address.get('editDate')
+            
+            if not duplicate_edit_date:
+                # Essayer de récupérer depuis le changelog
+                try:
+                    changelog_duplicate = self.get_address_changelog(duplicate_address['id'])
+                    if changelog_duplicate and len(changelog_duplicate) > 0:
+                        duplicate_edit_date = changelog_duplicate[-1].get('date')
+                except Exception:
+                    pass
+            
+            # Comparer les dates si on a les deux
+            if current_edit_date and duplicate_edit_date:
+                if current_edit_date > duplicate_edit_date:
+                    address_to_delete = address
+                    resolution_strategy = f"adresse courante plus récente ({current_edit_date} > {duplicate_edit_date})"
+                else:
+                    address_to_delete = duplicate_address
+                    resolution_strategy = f"adresse dupliquée plus récente ({duplicate_edit_date} >= {current_edit_date})"
+        except Exception as e:
+            logger.warning(f"Erreur récupération dates pour résolution doublon: {e}")
+        
+        # Stratégie 2 : Fallback sur l'ID (plus petit = plus ancien)
+        if address_to_delete is None:
+            try:
+                current_id = int(address.get('id', 0))
+                duplicate_id = int(duplicate_address.get('id', 0))
+                
+                if current_id > duplicate_id:
+                    address_to_delete = address
+                    resolution_strategy = f"ID plus récent ({current_id} > {duplicate_id})"
+                else:
+                    address_to_delete = duplicate_address
+                    resolution_strategy = f"ID plus ancien ({duplicate_id} >= {current_id})"
+            except Exception as e:
+                logger.warning(f"Erreur comparaison IDs: {e}")
+        
+        # Stratégie 3 : Dernier recours - supprimer l'adresse courante
+        if address_to_delete is None:
+            address_to_delete = address
+            resolution_strategy = "dernier recours (pas de critère de comparaison)"
+        
+        logger.info(f"Résolution doublon hostname: suppression {address_to_delete.get('ip')} (stratégie: {resolution_strategy})")
+        
+        # Supprimer les enregistrements DNS de l'adresse à supprimer
+        hostname_to_delete = address_to_delete.get('hostname')
+        ip_to_delete = address_to_delete.get('ip')
+        
+        if hostname_to_delete and ip_to_delete:
+            logger.info(f"Suppression des enregistrements DNS pour l'hostname dupliqué {hostname_to_delete} ({ip_to_delete})")
+            powerdns_api.delete_a_ptr_records(hostname_to_delete, ip_to_delete)
+        
+        # Supprimer l'adresse déterminée comme étant à supprimer
+        self.delete_address(ip_to_delete)
+        
+        # Préparer les infos d'erreur
+        error_message = f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}. Adresse supprimée ({resolution_strategy})"
+        error_info = {
+            'message': error_message,
+            'duplicate_address': duplicate_address,
+            'resolution_strategy': resolution_strategy
+        }
+        
+        # Si l'adresse courante est supprimée, arrêter le traitement
+        if address_to_delete == address:
+            return False, error_info
+        else:
+            logger.info(f"Doublon résolu : adresse {duplicate_address.get('ip')} supprimée, traitement continue pour {address.get('ip')}")
+            return True, None
         
     def close(self):
         """Ferme proprement la session"""
