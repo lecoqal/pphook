@@ -56,8 +56,8 @@ datetime = std_datetime.datetime
 timedelta = std_datetime.timedelta
 
 # Import des modules personnalisés
-from pdns import PowerDNSAPI as pdns
-from phpipam import PhpIPAMAPI as ipam
+from pdns import PowerDNSAPI
+from phpipam import PhpIPAMAPI
 
 # =================================================
 #  +-----------------------------------------+
@@ -277,7 +277,7 @@ def notify_mac_duplicate_callback(duplicate_info):
         addresses = duplicate_info['addresses']
         
         # Récupérer l'email de l'utilisateur responsable de l'adresse supprimée
-        phpipam = ipam(PHPIPAM_URL, PHPIPAM_APP_ID, PHPIPAM_USERNAME, PHPIPAM_PASSWORD, config=CONFIG)
+        phpipam = PhpIPAMAPI(PHPIPAM_URL, PHPIPAM_APP_ID, PHPIPAM_USERNAME, PHPIPAM_PASSWORD, config=CONFIG)
         phpipam.authenticate()
         
         user_email, username = phpipam.get_user_email_from_changelog(removed_from['id'])
@@ -321,56 +321,79 @@ def notify_mac_duplicate_callback(duplicate_info):
 
 def process_address(phpipam, powerdns, address, users, zones):
     """Fonction principale de traitement d'une adresse individuelle"""
-    logger.info(f"Traitement de l'adresse IP {address.get('ip')} ({address.get('hostname')})")
+    ip = address.get('ip')
+    hostname = address.get('hostname')
+    
+    logger.info(f"=== DÉBUT TRAITEMENT: {ip} ({hostname}) ===")
     
     # === RÉCUPÉRATION CHANGELOG ===
+    logger.debug("Étape 1: Récupération changelog")
     changelog = None
     try:
         changelog = phpipam.get_address_changelog(address.get('id'))
+        if changelog:
+            logger.debug(f"Changelog récupéré: {len(changelog)} entrées")
+        else:
+            logger.debug("Aucun changelog trouvé")
     except Exception as e:
         logger.debug(f"Impossible de récupérer changelog pour {address.get('id')}: {e}")
     
     # === INFOS UTILISATEUR DEPUIS CHANGELOG ===
+    logger.debug("Étape 2: Récupération infos utilisateur")
     user_email, username, use_generic_email = get_user_info_from_changelog(changelog, users)
     if not user_email:
         logger.error(f"Email non disponible pour notifier l'erreur pour {address.get('id')}")
         return False
-   
+    
+    logger.debug(f"Email utilisateur: {user_email} (générique: {use_generic_email})")
     edit_date, action = get_changelog_details(changelog, use_generic_email)
+    logger.debug(f"Changelog détails: {username}, {edit_date}, {action}")
     
     # === MAINTENANCE DONNÉES (AVANT TRAITEMENT) ===
     maintenance_editdate = not address.get('editDate') or str(address.get('editDate')).strip() == ""
     maintenance_changelog = not changelog or len(changelog) == 0
+    logger.debug(f"Maintenance requise - editDate: {maintenance_editdate}, changelog: {maintenance_changelog}")
     
     # === ÉTAPE 1: VALIDATION DONNÉES ===
+    logger.info("Étape 3: Validation des données")
     valid, error_message = validate_address_data(address)
     if not valid:
-        logger.error(f"Données invalides pour l'adresse {address.get('ip')}: {error_message}")
-        notify_error(address, address.get('hostname', 'Non défini'), address.get('ip', 'Non défini'),
-                    error_message, username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
+        logger.error(f"Données invalides pour {ip}: {error_message}")
+        notify_error(address, hostname, ip, error_message, username, edit_date, action, 
+                    user_email=user_email, use_generic_email=use_generic_email)
         return False
+    logger.info("Validation des données: OK")
     
-    # === ÉTAPE 2: VALIDATION HOSTNAME/ZONES (POUR CETTE ADRESSE SEULEMENT) ===
-    hostname = address.get('hostname')
-    ip = address.get('ip')
+    # === ÉTAPE 2: VALIDATION HOSTNAME/ZONES ===
+    logger.info("Étape 4: Validation hostname/zones DNS")
     
     # Valider le hostname contre les zones DNS
     is_valid, zone, error = powerdns.validate_hostname_domain(hostname, zones)
+    logger.info(f"Validation hostname: valid={is_valid}, zone={zone}, error={error}")
     
     if not is_valid:
         logger.warning(f"Hostname invalide détecté: {hostname} ({ip}) - {error}")
         
         # Supprimer les enregistrements DNS existants
+        logger.info("Nettoyage des enregistrements DNS pour hostname invalide")
         found_zone = powerdns.find_zone_for_hostname(hostname, zones)
+        logger.debug(f"Zone trouvée pour nettoyage A: {found_zone}")
+        
         if found_zone:
             success_a = powerdns.delete_record(found_zone, hostname, "A")
-            logger.debug(f"Suppression A record: {'OK' if success_a else 'ÉCHEC'}")
+            logger.info(f"Suppression A record: {'OK' if success_a else 'ÉCHEC'}")
+        else:
+            logger.debug("Pas de zone trouvée pour suppression A record")
         
         reverse_zone = powerdns.get_reverse_zone_from_ip(ip)
         ptr_name = powerdns.get_ptr_name_from_ip(ip)
+        logger.debug(f"Zone reverse calculée: {reverse_zone}, PTR name: {ptr_name}")
+        
         if reverse_zone and ptr_name:
             success_ptr = powerdns.delete_record(reverse_zone, ptr_name, "PTR")
-            logger.debug(f"Suppression PTR record: {'OK' if success_ptr else 'ÉCHEC'}")
+            logger.info(f"Suppression PTR record: {'OK' if success_ptr else 'ÉCHEC'}")
+        else:
+            logger.debug("Impossible de calculer PTR pour suppression")
         
         # Notifier l'utilisateur
         notify_error(address, hostname, ip, f"Hostname invalide: {error}", 
@@ -379,54 +402,97 @@ def process_address(phpipam, powerdns, address, users, zones):
         logger.info(f"Hostname invalide nettoyé: {hostname}")
         return True  # Considéré comme succès (nettoyage fait)
     
+    logger.info("Validation hostname/zones: OK")
+    
     # === ÉTAPE 3: TRAITEMENT COHÉRENCE DNS ===
+    logger.info("Étape 5: Traitement cohérence DNS")
+    
     def dns_error_callback(msg):
+        logger.warning(f"DNS error callback: {msg}")
         notify_error(address, hostname, ip, msg, username, edit_date, action,
                     user_email=user_email, use_generic_email=use_generic_email)
 
     try:
         # Trouver la zone pour ce hostname
+        logger.debug("Recherche zone forward pour hostname")
         zone_found = powerdns.find_zone_for_hostname(hostname, zones)
+        logger.info(f"Zone forward trouvée: {zone_found}")
+        
         if not zone_found:
             logger.warning(f"Aucune zone trouvée pour {hostname}")
             success = False
         else:
             # Calculer les infos PTR
+            logger.debug("Calcul des informations PTR")
             reverse_zone = powerdns.get_reverse_zone_from_ip(ip)
             ptr_name = powerdns.get_ptr_name_from_ip(ip)
             
+            logger.info(f"Zone reverse calculée: {reverse_zone}")
+            logger.info(f"PTR name calculé: {ptr_name}")
+            
+            # Vérifier si la zone reverse existe dans PowerDNS
+            if reverse_zone:
+                reverse_zone_clean = reverse_zone.rstrip('.')
+                if reverse_zone_clean not in zones:
+                    logger.warning(f"Zone reverse {reverse_zone} n'existe pas dans PowerDNS - opérations PTR désactivées")
+                    reverse_zone = None
+                    ptr_name = None
+                else:
+                    logger.debug(f"Zone reverse {reverse_zone} confirmée dans PowerDNS")
+            
             # Vérifier l'état actuel des enregistrements
+            logger.debug("Vérification état des enregistrements DNS")
+            logger.debug(f"Recherche A record dans zone: {zone_found}")
             a_record = powerdns.get_record(zone_found, hostname, "A")
-            ptr_record = powerdns.get_record(reverse_zone, ptr_name, "PTR") if reverse_zone and ptr_name else None
+            
+            ptr_record = None
+            if reverse_zone and ptr_name:
+                logger.debug(f"Recherche PTR record dans zone: {reverse_zone}")
+                ptr_record = powerdns.get_record(reverse_zone, ptr_name, "PTR")
+            else:
+                logger.debug("Skip vérification PTR (zone reverse indisponible)")
             
             # Déterminer l'action selon l'état
             has_a = a_record is not None
             has_ptr = ptr_record is not None
             corrected = False
             
+            logger.info(f"État DNS: A record={has_a}, PTR record={has_ptr}")
+            
             if not has_a and not has_ptr:
                 # Aucun enregistrement - rien à faire
-                logger.debug(f"Aucun enregistrement DNS pour {hostname} ({ip})")
+                logger.info(f"Aucun enregistrement DNS pour {hostname} ({ip}) - rien à faire")
                 success = True
                 
             elif has_a and not has_ptr:
                 # A existe mais pas PTR - créer PTR
-                logger.info(f"Création PTR manquant pour {hostname} ({ip})")
-                hostname_with_dot = hostname if hostname.endswith('.') else f"{hostname}."
-                success = powerdns.create_record(reverse_zone, ptr_name, "PTR", hostname_with_dot)
-                corrected = success
+                if reverse_zone and ptr_name:
+                    logger.info(f"A record existe, création PTR manquant pour {hostname} ({ip})")
+                    hostname_with_dot = hostname if hostname.endswith('.') else f"{hostname}."
+                    success = powerdns.create_record(reverse_zone, ptr_name, "PTR", hostname_with_dot)
+                    if success:
+                        logger.info("PTR record créé avec succès")
+                        corrected = True
+                    else:
+                        logger.error("Échec création PTR record")
+                else:
+                    logger.warning("A record existe mais zone reverse indisponible - skip création PTR")
+                    success = True  # On considère que c'est OK
                 
             elif not has_a and has_ptr:
                 # PTR existe mais pas A - supprimer PTR orphelin
-                logger.info(f"Suppression PTR orphelin pour {ip}")
+                logger.info(f"PTR orphelin détecté, suppression pour {ip}")
                 success = powerdns.delete_record(reverse_zone, ptr_name, "PTR")
                 if success:
+                    logger.info("PTR orphelin supprimé avec succès")
                     dns_error_callback("PTR orphelin supprimé")
-                corrected = success
+                    corrected = True
+                else:
+                    logger.error("Échec suppression PTR orphelin")
                 
             elif has_a and has_ptr:
                 # Les deux existent - vérifier cohérence
-                logger.debug(f"Vérification cohérence A/PTR pour {hostname} ({ip})")
+                logger.info(f"Vérification cohérence A/PTR pour {hostname} ({ip})")
                 
                 # Extraire les contenus
                 a_content = None
@@ -442,24 +508,32 @@ def process_address(phpipam, powerdns, address, users, zones):
                         ptr_content = record.get("content")
                         break
                 
+                logger.debug(f"Contenu A record: {a_content}")
+                logger.debug(f"Contenu PTR record: {ptr_content}")
+                
                 # Vérifier cohérence
                 hostname_with_dot = hostname if hostname.endswith('.') else f"{hostname}."
                 
                 if a_content == ip and ptr_content == hostname_with_dot:
                     # Cohérents
-                    logger.debug(f"Enregistrements A/PTR cohérents pour {hostname}")
+                    logger.info(f"Enregistrements A/PTR cohérents pour {hostname}")
                     success = True
                 else:
                     # Incohérents - corriger
                     logger.warning(f"Incohérence A/PTR détectée pour {hostname}: A={a_content}, PTR={ptr_content}")
+                    logger.info("Correction des enregistrements incohérents")
                     
                     # Supprimer les deux
+                    logger.debug("Suppression des enregistrements incohérents")
                     delete_a = powerdns.delete_record(zone_found, hostname, "A")
                     delete_ptr = powerdns.delete_record(reverse_zone, ptr_name, "PTR")
+                    logger.debug(f"Suppression A: {'OK' if delete_a else 'ÉCHEC'}, PTR: {'OK' if delete_ptr else 'ÉCHEC'}")
                     
                     # Recréer les deux
+                    logger.debug("Recréation des enregistrements corrigés")
                     create_a = powerdns.create_record(zone_found, hostname, "A", ip)
                     create_ptr = powerdns.create_record(reverse_zone, ptr_name, "PTR", hostname_with_dot)
+                    logger.debug(f"Création A: {'OK' if create_a else 'ÉCHEC'}, PTR: {'OK' if create_ptr else 'ÉCHEC'}")
                     
                     success = create_a and create_ptr
                     corrected = success
@@ -471,6 +545,7 @@ def process_address(phpipam, powerdns, address, users, zones):
             
             # Notification si correction effectuée
             if corrected:
+                logger.info("Notification utilisateur - enregistrements DNS corrigés")
                 notify_error(address, hostname, ip,
                            "Enregistrements DNS incohérents corrigés automatiquement",
                            username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
@@ -481,6 +556,7 @@ def process_address(phpipam, powerdns, address, users, zones):
     
     # === MAINTENANCE DONNÉES (APRÈS TRAITEMENT RÉUSSI) ===
     if success:
+        logger.debug("Traitement DNS réussi, vérification maintenance")
         if maintenance_editdate:
             # TODO: Implémenter avec les nouvelles classes simplifiées
             # update_success = phpipam.update_address_editdate(address.get('id'))
@@ -492,7 +568,10 @@ def process_address(phpipam, powerdns, address, users, zones):
             # changelog_success = phpipam.create_changelog_entry(address.get('id'))
             # Pour l'instant, skip
             logger.debug(f"Maintenance changelog à implémenter pour {ip}")
+    else:
+        logger.warning("Traitement DNS échoué - pas de maintenance")
     
+    logger.info(f"=== FIN TRAITEMENT: {ip} - {'SUCCÈS' if success else 'ÉCHEC'} ===")
     return success
 
 def get_user_info_from_changelog(changelog, users):
@@ -561,11 +640,6 @@ def validate_address_data(address):
     hostname_valid, hostname_message = validate_hostname(address.get('hostname'))
     if not hostname_valid:
         return False, hostname_message
-    
-    # Valider le subnet
-    subnet_valid, subnet_message = validate_subnet_ip(address.get('subnetId'))
-    if not subnet_valid:
-        return False, subnet_message
 
     return True, "Données valides"
 
@@ -764,7 +838,7 @@ def main():
             # Cette fonction se concentrera uniquement sur la cohérence DNS A/PTR
             # sans validation/nettoyage (déjà fait dans les phases précédentes)
             
-            success = process_address(address, powerdns, users, zones)
+            success = process_address(address, powerdns, address, users, zones)
             
             if success:
                 success_count += 1
