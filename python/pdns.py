@@ -2,83 +2,98 @@
 # -*- coding: utf-8 -*-
 
 """
-
-$$$$$$$\                                              $$$$$$$\  $$\   $$\  $$$$$$\  
-$$  __$$\                                             $$  __$$\ $$$\  $$ |$$  __$$\ 
-$$ |  $$ | $$$$$$\  $$\  $$\  $$\  $$$$$$\   $$$$$$\  $$ |  $$ |$$$$\ $$ |$$ /  \__|
-$$$$$$$  |$$  __$$\ $$ | $$ | $$ |$$  __$$\ $$  __$$\ $$ |  $$ |$$ $$\$$ |\$$$$$$\  
-$$  ____/ $$ /  $$ |$$ | $$ | $$ |$$$$$$$$ |$$ |  \__|$$ |  $$ |$$ \$$$$ | \____$$\ 
-$$ |      $$ |  $$ |$$ | $$ | $$ |$$   ____|$$ |      $$ |  $$ |$$ |\$$$ |$$\   $$ |
-$$ |      \$$$$$$  |\$$$$$\$$$$  |\$$$$$$$\ $$ |      $$$$$$$  |$$ | \$$ |\$$$$$$  |
-\__|       \______/  \_____\____/  \_______|\__|      \_______/ \__|  \__| \______/ 
-                                                                                    
-                                                                                   
-Module PowerDNS API pour l'intégration phpIPAM-PowerDNS
-Fonctions:
-- Vérification et création de zones DNS
-- Création d'enregistrements A et PTR
-- Suppression d'enregistrements
+Module PowerDNS API simplifié pour l'intégration phpIPAM-PowerDNS
+Fonctions essentielles uniquement pour performance optimale
 
 Auteur: Lecoq Alexis
 Date: 06/05/25
-Version: 1.2
+Version: 2.0
 """
 
 import requests
 import logging
 import ipaddress
-import json
-logger = logging.getLogger("pphook")
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
-import threading
+
+logger = logging.getLogger("pphook")
 
 class PowerDNSAPI:
-    """Classe pour interagir avec l'API PowerDNS - Version étendue"""
+    """Classe PowerDNS"""
     
-    def __init__(self, api_url, api_key, server, config=None):
+    def __init__(self, api_url, api_key, server="localhost"):
         self.api_url = api_url.rstrip('/')
         self.api_key = api_key
         self.server = server
-        self.config = config
         self.session = self._create_session()
         self.headers = {
             "X-API-Key": self.api_key,
             "Content-Type": "application/json"
         }
         
-        # === CACHE DNS ZONES ===
+        # Cache DNS simple
         self._zones_cache = None
         self._zones_cache_time = 0
-        self._zones_cache_ttl = 3600  # 1 heure par défaut
-        self._zones_cache_lock = threading.Lock()  # Thread-safe
-        
-        # Configuration TTL depuis config si disponible
-        if self.config:
-            self._zones_cache_ttl = self.config.getint('cache', 'zones_ttl', fallback=3600)
-        
-        logger.debug(f"Cache DNS initialisé avec TTL={self._zones_cache_ttl}s")
-
-    def _is_cache_valid(self):
-        """Vérifie si le cache est encore valide"""
-        return (self._zones_cache is not None and 
-                time.time() - self._zones_cache_time < self._zones_cache_ttl)
+        self._zones_cache_ttl = 3600  # 1 heure
     
-    def _update_zones_cache(self, force=False):
-        """Met à jour le cache des zones avec thread safety"""
-        with self._zones_cache_lock:
-            # Double-check avec le lock (évite les updates multiples)
-            if not force and self._is_cache_valid():
-                return self._zones_cache
+    def _create_session(self):
+            """Crée une session HTTP optimisée"""
+            session = requests.Session()
             
-            logger.debug("Mise à jour du cache DNS zones...")
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=0.3,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST", "PATCH"]
+            )
             
-            # Appel API PowerDNS original
-            zones_data = self.get_zones()  # Appel de la méthode existante
+            adapter = HTTPAdapter(
+                max_retries=retry_strategy,
+                pool_connections=8,
+                pool_maxsize=15
+            )
             
-            if zones_data:
-                # Nettoyer les noms de zones (enlever le point final)
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            session.timeout = (3, 20)
+            
+            session.headers.update({
+                'User-Agent': 'PPHOOK-PowerDNS/2.0',
+                'Accept': 'application/json'
+            })
+            
+            return session
+
+    def get_zones(self, clean=True, use_cache=True):
+        """
+        Récupère la liste des zones DNS avec cache optionnel
+        
+        API: GET /api/v1/servers/{server}/zones
+        Params: 
+            clean (bool) - Si True, retourne noms sans point final
+            use_cache (bool) - Si True, utilise le cache (TTL 1h)
+        Returns: list[str] - Liste des noms de zones
+        """
+        # Vérifier le cache si demandé
+        if use_cache and self._zones_cache is not None:
+            cache_age = time.time() - self._zones_cache_time
+            if cache_age < self._zones_cache_ttl:
+                logger.debug(f"Cache DNS hit: {len(self._zones_cache)} zones (âge: {int(cache_age)}s)")
+                return self._zones_cache.copy()
+        
+        # Cache manqué ou désactivé - appel API
+        try:
+            response = self.session.get(
+                f"{self.api_url}/servers/{self.server}/zones",
+                headers=self.headers
+            )
+            response.raise_for_status()
+            
+            zones_data = response.json()
+            
+            if clean:
+                # Nettoyer les noms (enlever point final)
                 clean_zones = []
                 for zone in zones_data:
                     name = zone.get("name", "")
@@ -87,898 +102,298 @@ class PowerDNSAPI:
                     if name:
                         clean_zones.append(name.lower())
                 
-                # Mise à jour cache
-                self._zones_cache = clean_zones
+                result = clean_zones
+            else:
+                # Retourner les données brutes
+                result = zones_data
+            
+            # Mettre à jour le cache si clean=True (seul cas où on cache)
+            if use_cache and clean:
+                self._zones_cache = result.copy()
                 self._zones_cache_time = time.time()
-                
-                logger.info(f"Cache DNS mis à jour: {len(clean_zones)} zones (TTL={self._zones_cache_ttl}s)")
-                return clean_zones
-            else:
-                logger.error("Échec mise à jour cache DNS - données vides")
-                return []
-
-    def get_existing_zones_cached(self, force_refresh=False):
-        """
-        Version cachée de get_existing_zones()
-        
-        Args:
-            force_refresh (bool): Force le rafraîchissement du cache
+                logger.debug(f"Cache DNS mis à jour: {len(result)} zones")
             
-        Returns:
-            list: Liste des noms de zones sans le point final
-        """
-        # Vérifier si le cache est valide
-        if not force_refresh and self._is_cache_valid():
-            logger.debug(f"Cache DNS hit: {len(self._zones_cache)} zones")
-            return self._zones_cache.copy()  # Copie pour éviter modifications externes
-        
-        # Cache invalide ou refresh forcé
-        if force_refresh:
-            logger.debug("Refresh forcé du cache DNS")
-        else:
-            logger.debug("Cache DNS expiré, rechargement...")
-        
-        return self._update_zones_cache(force=force_refresh)
-
-    def get_existing_zones(self):
-        """
-        ANCIENNE méthode conservée pour compatibilité
-        Recommandation: utiliser get_existing_zones_cached() pour de meilleures performances
-        """
-        zones = self.get_zones()
-        # Nettoyer les noms de zones (enlever le point final)
-        clean_zones = []
-        for zone in zones:
-            name = zone.get("name", "")
-            if name.endswith('.'):
-                name = name[:-1]
-            if name:
-                clean_zones.append(name.lower())
-
-        logger.debug(f"Zones existantes (sans cache): {clean_zones}")
-        return clean_zones
-
-    def invalidate_zones_cache(self):
-        """Invalide manuellement le cache des zones"""
-        with self._zones_cache_lock:
-            self._zones_cache = None
-            self._zones_cache_time = 0
-            logger.info("Cache DNS zones invalidé manuellement")
-
-    def get_cache_info(self):
-        """Retourne les informations du cache pour debug/monitoring"""
-        if self._zones_cache is None:
-            return {
-                'status': 'empty',
-                'zones_count': 0,
-                'ttl': self._zones_cache_ttl,
-                'age': 0,
-                'expires_in': 0
-            }
-        
-        age = time.time() - self._zones_cache_time
-        expires_in = max(0, self._zones_cache_ttl - age)
-        
-        return {
-            'status': 'valid' if self._is_cache_valid() else 'expired',
-            'zones_count': len(self._zones_cache),
-            'ttl': self._zones_cache_ttl,
-            'age': round(age, 2),
-            'expires_in': round(expires_in, 2)
-        }
-    
-    def _create_session(self):
-        """Crée une session avec pool de connexions et retry automatique"""
-        session = requests.Session()
-        
-        # Configuration du retry automatique pour PowerDNS
-        retry_strategy = Retry(
-            total=3,                    # 3 tentatives max
-            backoff_factor=0.3,         # Délai plus court pour PowerDNS (0.3, 0.6, 1.2 sec)
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST", "PATCH"]
-        )
-        
-        # Adaptateur HTTP avec retry
-        adapter = HTTPAdapter(
-            max_retries=retry_strategy,
-            pool_connections=8,         # Pool plus petit pour PowerDNS
-            pool_maxsize=15            # Max 15 connexions par host
-        )
-        
-        # Appliquer l'adaptateur
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        
-        # Timeout optimisé pour PowerDNS (généralement plus rapide)
-        session.timeout = (3, 20)  # (connect_timeout, read_timeout)
-        
-        # Headers par défaut
-        session.headers.update({
-            'User-Agent': 'PPHOOK-PowerDNS/2.0',
-            'Accept': 'application/json'
-        })
-        
-        return session
-    
-    def get_zones(self):
-        """
-        Récupère la liste de toutes les zones configurées dans PowerDNS
-        avec une gestion robuste des erreurs
-        
-        Returns:
-            list: Liste des zones configurées ou liste vide en cas d'erreur
-        """
-        zones_url = f"{self.api_url}/servers/{self.server}/zones"
-        
-        try:
-            response = self.session.get(zones_url, headers=self.headers)
-            
-            if response.status_code == 200:
-                zones = response.json()
-                logger.debug(f"Récupération de {len(zones)} zones")
-                return zones
-            else:
-                logger.error(f"Erreur lors de la récupération des zones: {response.status_code}")
-                if response.text:
-                    logger.error(f"Détails: {response.text}")
-                return []
+            logger.debug(f"Récupéré {len(result)} zones DNS depuis l'API")
+            return result
                 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Exception lors de la récupération des zones: {str(e)}")
+        except Exception as e:
+            logger.error(f"Erreur get_zones: {e}")
+            
+            # En cas d'erreur, retourner le cache s'il existe
+            if use_cache and self._zones_cache is not None:
+                logger.warning("Erreur API - utilisation du cache expiré")
+                return self._zones_cache.copy()
+            
             return []
-        except ValueError as e:
-            logger.error(f"Erreur lors du parsing JSON: {str(e)}")
-            return []
-    
-    def get_zone(self, zone_name):
-        """Récupère une zone spécifique par son nom"""
-        # S'assurer que zone_name se termine par un point
+
+    def get_record(self, zone_name, record_name, record_type):
+        """
+        Récupère un enregistrement DNS spécifique
+        
+        API: GET /api/v1/servers/{server}/zones/{zone}
+        Params:
+            zone_name (str) - Nom de la zone
+            record_name (str) - Nom de l'enregistrement  
+            record_type (str) - Type (A, PTR, etc.)
+        Returns: dict|None - Enregistrement trouvé ou None
+        """
+        # Normaliser les noms (ajouter point final)
         if not zone_name.endswith('.'):
             zone_name = f"{zone_name}."
-            
-        zone_url = f"{self.api_url}/servers/{self.server}/zones/{zone_name}"
-        
-        try:
-            response = self.session.get(zone_url, headers=self.headers)
-            
-            if response.status_code == 200:
-                return response.json()
-            elif response.status_code == 404:
-                logger.warning(f"Zone {zone_name} non trouvée")
-                return None
-            else:
-                logger.error(f"Erreur lors de la récupération de la zone {zone_name}: {response.status_code}")
-                if response.text:
-                    logger.error(f"Détails: {response.text}")
-                return None
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Exception lors de la récupération de la zone {zone_name}: {str(e)}")
-            return None
-        except ValueError as e:
-            logger.error(f"Erreur lors du parsing JSON: {str(e)}")
-            return None
-    
-    def get_record(self, zone_name, record_name, record_type):
-        """Récupère un enregistrement DNS spécifique"""
-        zone = self.get_zone(zone_name)
-        if not zone:
-            return None
-            
-        # S'assurer que record_name se termine par un point
         if not record_name.endswith('.'):
             record_name = f"{record_name}."
             
-        # Chercher l'enregistrement dans les rrsets de la zone
-        for rrset in zone.get("rrsets", []):
-            if rrset["name"] == record_name and rrset["type"] == record_type:
-                return rrset
-                
-        return None
-            
-    def ensure_zone_exists(self, zone_name):
-        """Vérifie si une zone existe en utilisant l'API PowerDNS"""
-        # S'assurer que zone_name se termine par un point
-        if not zone_name.endswith('.'):
-            zone_name = f"{zone_name}."
-            
-        zone_url = f"{self.api_url}/servers/{self.server}/zones/{zone_name}"
-        
         try:
-            # UTILISER self.session
-            response = self.session.get(zone_url, headers=self.headers)
+            response = self.session.get(
+                f"{self.api_url}/servers/{self.server}/zones/{zone_name}",
+                headers=self.headers
+            )
             
-            # 200 OK = zone existe
-            if response.status_code == 200:
-                return True
-                
-            # 404 NOT FOUND = zone n'existe pas
-            elif response.status_code == 404:
+            if response.status_code == 404:
                 logger.debug(f"Zone {zone_name} non trouvée")
-                return False
-                
-            # 422 UNPROCESSABLE ENTITY = généralement un problème de format
-            elif response.status_code == 422:
-                logger.debug(f"Format de zone incorrect pour {zone_name}")
-                return False
-                
-            # Autre cas d'erreur
-            else:
-                logger.error(f"Erreur lors de la récupération de la zone {zone_name}: {response.status_code}")
-                if response.text:
-                    logger.error(f"Détails: {response.text}")
-                return False
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Exception lors de la récupération de la zone {zone_name}: {str(e)}")
-            return False
+                return None
+            
+            response.raise_for_status()
+            zone_data = response.json()
+            
+            # Chercher l'enregistrement dans les rrsets
+            for rrset in zone_data.get("rrsets", []):
+                if rrset["name"] == record_name and rrset["type"] == record_type:
+                    return rrset
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Erreur get_record {record_name} ({record_type}) dans {zone_name}: {e}")
+            return None
 
     def create_record(self, zone_name, record_name, record_type, content, ttl=3600):
-        """Crée ou met à jour un enregistrement DNS"""
-        # Vérifier que la zone existe
-        if not self.ensure_zone_exists(zone_name):
-            logger.error(f"La zone {zone_name} n'existe pas, impossible de créer l'enregistrement")
-            return False
-            
-        # S'assurer que zone_name et record_name se terminent par un point
+        """
+        Crée ou met à jour un enregistrement DNS
+        
+        API: PATCH /api/v1/servers/{server}/zones/{zone}
+        Params:
+            zone_name (str) - Nom de la zone
+            record_name (str) - Nom de l'enregistrement
+            record_type (str) - Type (A, PTR, etc.)
+            content (str) - Contenu de l'enregistrement
+            ttl (int) - TTL en secondes
+        Returns: bool - True si succès
+        """
+        # Normaliser les noms
         if not zone_name.endswith('.'):
             zone_name = f"{zone_name}."
-            
         if not record_name.endswith('.'):
             record_name = f"{record_name}."
-            
-        zone_url = f"{self.api_url}/servers/{self.server}/zones/{zone_name}"
         
-        # Vérifier si l'enregistrement existe déjà
-        existing_record = self.get_record(zone_name, record_name, record_type)
+        # Vérifier si l'enregistrement existe déjà avec le bon contenu
+        existing = self.get_record(zone_name, record_name, record_type)
+        if existing:
+            for record in existing.get("records", []):
+                if not record.get("disabled", False) and record.get("content") == content:
+                    logger.debug(f"Enregistrement {record_name} ({record_type}) déjà correct")
+                    return True
         
-        changetype = "REPLACE"  # Utiliser REPLACE par défaut
-        
-        # Si l'enregistrement existe et a déjà le bon contenu, ne rien faire
-        if existing_record:
-            current_content = None
-            for record in existing_record.get("records", []):
-                if not record.get("disabled", False):
-                    current_content = record.get("content")
-                    break
-                    
-            if current_content == content:
-                logger.info(f"L'enregistrement {record_name} ({record_type}) existe déjà avec le bon contenu dans la zone {zone_name}")
-                return True
-        
-        # Préparer les données pour la requête API
         data = {
-            "rrsets": [
-                {
-                    "name": record_name,
-                    "type": record_type,
-                    "ttl": ttl,
-                    "changetype": changetype,
-                    "records": [
-                        {
-                            "content": content,
-                            "disabled": False
-                        }
-                    ]
-                }
-            ]
+            "rrsets": [{
+                "name": record_name,
+                "type": record_type,
+                "ttl": ttl,
+                "changetype": "REPLACE",
+                "records": [{
+                    "content": content,
+                    "disabled": False
+                }]
+            }]
         }
         
         try:
-            # UTILISER self.session
-            response = self.session.patch(zone_url, headers=self.headers, json=data)
+            response = self.session.patch(
+                f"{self.api_url}/servers/{self.server}/zones/{zone_name}",
+                headers=self.headers,
+                json=data
+            )
+            
             if response.status_code in [200, 204]:
-                logger.info(f"Enregistrement {record_name} ({record_type}) créé/mis à jour avec succès dans la zone {zone_name}")
+                logger.info(f"Enregistrement {record_name} ({record_type}) créé/mis à jour")
                 return True
             else:
-                logger.error(f"Erreur lors de la création/mise à jour de l'enregistrement {record_name}: {response.status_code}, {response.text}")
-                
-                # Si l'erreur est "Changetype not understood", essayer sans "changetype"
-                if "Changetype not understood" in response.text:
-                    logger.info(f"Tentative de création sans spécifier 'changetype'")
-                    # Supprimer le changetype dans la requête
-                    data["rrsets"][0].pop("changetype", None)
-                    
-                    try:
-                        response = self.session.patch(zone_url, headers=self.headers, json=data)
-                        if response.status_code in [200, 204]:
-                            logger.info(f"Enregistrement {record_name} ({record_type}) créé/mis à jour avec succès dans la zone {zone_name}")
-                            return True
-                        else:
-                            logger.error(f"Nouvelle tentative échouée: {response.status_code}, {response.text}")
-                    except Exception as e:
-                        logger.error(f"Exception lors de la nouvelle tentative: {str(e)}")
-                
+                logger.error(f"Erreur création {record_name}: {response.status_code} - {response.text}")
                 return False
+                
         except Exception as e:
-            logger.error(f"Erreur lors de la création/mise à jour de l'enregistrement {record_name}: {str(e)}")
+            logger.error(f"Erreur create_record {record_name}: {e}")
             return False
-                       
+
     def delete_record(self, zone_name, record_name, record_type):
-        """Supprime un enregistrement DNS"""
-        # Vérifier que la zone existe
-        if not self.ensure_zone_exists(zone_name):
-            logger.error(f"La zone {zone_name} n'existe pas, impossible de supprimer l'enregistrement")
-            return False
-            
-        # S'assurer que zone_name et record_name se terminent par un point
+        """
+        Supprime un enregistrement DNS
+        
+        API: PATCH /api/v1/servers/{server}/zones/{zone}
+        Params:
+            zone_name (str) - Nom de la zone
+            record_name (str) - Nom de l'enregistrement
+            record_type (str) - Type (A, PTR, etc.)
+        Returns: bool - True si succès
+        """
+        # Normaliser les noms
         if not zone_name.endswith('.'):
             zone_name = f"{zone_name}."
-            
         if not record_name.endswith('.'):
             record_name = f"{record_name}."
-            
-        zone_url = f"{self.api_url}/servers/{self.server}/zones/{zone_name}"
         
         data = {
-            "rrsets": [
-                {
-                    "name": record_name,
-                    "type": record_type,
-                    "changetype": "DELETE"
-                }
-            ]
+            "rrsets": [{
+                "name": record_name,
+                "type": record_type,
+                "changetype": "DELETE"
+            }]
         }
         
         try:
-            # UTILISER self.session
-            response = self.session.patch(zone_url, headers=self.headers, json=data)
+            response = self.session.patch(
+                f"{self.api_url}/servers/{self.server}/zones/{zone_name}",
+                headers=self.headers,
+                json=data
+            )
+            
             if response.status_code == 204:
-                logger.info(f"Enregistrement {record_name} ({record_type}) supprimé avec succès de la zone {zone_name}")
+                logger.info(f"Enregistrement {record_name} ({record_type}) supprimé")
                 return True
             else:
-                logger.error(f"Erreur lors de la suppression de l'enregistrement {record_name}: {response.status_code}, {response.text}")
+                logger.error(f"Erreur suppression {record_name}: {response.status_code} - {response.text}")
                 return False
+                
         except Exception as e:
-            logger.error(f"Erreur lors de la suppression de l'enregistrement {record_name}: {str(e)}")
+            logger.error(f"Erreur delete_record {record_name}: {e}")
             return False
+
+    def validate_hostname_domain(self, hostname, zones):
+        """
+        Valide qu'un hostname correspond à une zone existante
+        
+        API: Aucun (validation locale)
+        Params:
+            hostname (str) - Hostname à valider
+            zones (list[str]) - Liste des zones existantes
+        Returns: tuple (bool, str|None, str|None) - (is_valid, zone, error_message)
+        """
+        try:
+            hostname = hostname.lower().strip()
             
+            # Vérifier format de base
+            if '.' not in hostname:
+                return False, None, "Le hostname doit contenir au moins un domaine"
+            
+            parts = hostname.split('.')
+            name = parts[0]
+            domain = '.'.join(parts[1:])
+            
+            # Vérifier que le nom n'a pas de point
+            if '.' in name:
+                return False, None, f"Le nom '{name}' ne doit pas contenir de point"
+            
+            # Chercher la zone correspondante
+            if domain in zones:
+                return True, domain, None
+            
+            # Essayer des zones plus générales
+            for i in range(1, len(parts)):
+                potential_zone = '.'.join(parts[i:])
+                if potential_zone in zones:
+                    return True, potential_zone, None
+            
+            return False, None, f"Aucune zone trouvée pour le domaine '{domain}'"
+            
+        except Exception as e:
+            logger.error(f"Erreur validate_hostname_domain {hostname}: {e}")
+            return False, None, f"Erreur de validation: {e}"
+
     def get_ptr_name_from_ip(self, ip):
         """
-        Génère le nom PTR à partir d'une adresse IP
-        Exemple: 192.168.1.10 -> 10.1.168.192.in-addr.arpa.
+        Génère le nom PTR à partir d'une IP
+        
+        API: Aucun (calcul local)
+        Params: ip (str) - Adresse IP
+        Returns: str|None - Nom PTR ou None si erreur
         """
         try:
             ip_obj = ipaddress.ip_address(ip)
             if isinstance(ip_obj, ipaddress.IPv4Address):
-                # Pour IPv4, inversion des octets
                 octets = str(ip_obj).split('.')
                 return f"{octets[3]}.{octets[2]}.{octets[1]}.{octets[0]}.in-addr.arpa."
             else:
-                # Pour IPv6, inversion des nibbles
+                # IPv6 - logique simplifiée
                 ip_exploded = ip_obj.exploded
                 ip_nibbles = ''.join(ip_exploded.replace(':', ''))
-                reverse = '.'.join(reversed(ip_nibbles)) + '.ip6.arpa.'
-                return reverse
+                return '.'.join(reversed(ip_nibbles)) + '.ip6.arpa.'
         except ValueError:
-            logger.error(f"Adresse IP invalide: {ip}")
+            logger.error(f"IP invalide: {ip}")
             return None
-            
+
     def get_reverse_zone_from_ip(self, ip):
         """
-        Détermine la zone de reverse DNS à partir d'une adresse IP
-        Exemple: 192.168.1.10 -> 1.168.192.in-addr.arpa.
+        Détermine la zone reverse à partir d'une IP
+        
+        API: Aucun (calcul local)
+        Params: ip (str) - Adresse IP
+        Returns: str|None - Zone reverse ou None si erreur
         """
         try:
             ip_obj = ipaddress.ip_address(ip)
             if isinstance(ip_obj, ipaddress.IPv4Address):
-                # Pour IPv4, on utilise généralement les 3 premiers octets inversés
                 octets = str(ip_obj).split('.')
                 return f"{octets[2]}.{octets[1]}.{octets[0]}.in-addr.arpa."
             else:
-                # Pour IPv6, logique simplifiée (peut nécessiter ajustement selon votre découpage de zones)
+                # IPv6 - logique simplifiée pour /64
                 ip_exploded = ip_obj.exploded
                 ip_nibbles = ''.join(ip_exploded.replace(':', ''))
-                # Utilise typiquement un /64 pour IPv6
-                reverse = '.'.join(reversed(ip_nibbles[:16])) + '.ip6.arpa.'
-                return reverse
+                return '.'.join(reversed(ip_nibbles[:16])) + '.ip6.arpa.'
         except ValueError:
-            logger.error(f"Adresse IP invalide: {ip}")
+            logger.error(f"IP invalide: {ip}")
             return None
-        
-    def create_a_ptr_records(self, hostname, ip, ttl=3600):
-        """
-        Crée ou met à jour les enregistrements A et PTR pour un hostname et une IP
-        Retourne (success, error_message)
-        """
-        # S'assurer que hostname se termine par un point
-        if not hostname.endswith('.'):
-            hostname = f"{hostname}."
-            
-        # Obtenir la zone forward
-        parts = hostname.split('.')
-        if len(parts) < 3:
-            return False, f"Format FQDN invalide: {hostname}"
-            
-        forward_zone = '.'.join(parts[-3:-1]) + '.'
-        
-        # Vérifier l'existence de la zone forward
-        if not self.ensure_zone_exists(forward_zone):
-            return False, f"La zone forward {forward_zone} n'existe pas"
-            
-        # Récupérer le nom PTR et la zone reverse
-        ptr_name = self.get_ptr_name_from_ip(ip)
-        reverse_zone = self.get_reverse_zone_from_ip(ip)
-        
-        # Vérifier l'existence de la zone reverse
-        if not self.ensure_zone_exists(reverse_zone):
-            return False, f"La zone reverse {reverse_zone} n'existe pas"
-            
-        # Créer/mettre à jour l'enregistrement A
-        a_success = self.create_record(forward_zone, hostname, "A", ip, ttl)
-        if not a_success:
-            return False, f"Échec de création/mise à jour de l'enregistrement A pour {hostname}"
-            
-        # Créer/mettre à jour l'enregistrement PTR
-        ptr_success = self.create_record(reverse_zone, ptr_name, "PTR", hostname, ttl)
-        if not ptr_success:
-            # Si l'A a réussi mais pas le PTR, on pourrait envisager de supprimer l'A
-            # pour maintenir la cohérence, mais on laisse cette décision au code appelant
-            return False, f"Échec de création/mise à jour de l'enregistrement PTR pour {ip}"
-            
-        return True, None
-        
-    def delete_a_ptr_records(self, hostname, ip):
-        """
-        Supprime les enregistrements A et PTR associés
-        Retourne (success, error_message)
-        """
-        # S'assurer que hostname se termine par un point
-        if not hostname.endswith('.'):
-            hostname = f"{hostname}."
-            
-        # Obtenir la zone forward
-        parts = hostname.split('.')
-        if len(parts) < 3:
-            return False, f"Format FQDN invalide: {hostname}"
-            
-        forward_zone = '.'.join(parts[-3:-1]) + '.'
-        
-        # Récupérer le nom PTR et la zone reverse
-        ptr_name = self.get_ptr_name_from_ip(ip)
-        reverse_zone = self.get_reverse_zone_from_ip(ip)
-        
-        # Vérifier l'existence des zones
-        forward_exists = self.ensure_zone_exists(forward_zone)
-        reverse_exists = self.ensure_zone_exists(reverse_zone)
-        
-        success = True
-        errors = []
-        
-        # Supprimer l'enregistrement A s'il existe
-        if forward_exists:
-            a_success = self.delete_record(forward_zone, hostname, "A")
-            if not a_success:
-                success = False
-                errors.append(f"Échec de suppression de l'enregistrement A pour {hostname}")
-        
-        # Supprimer l'enregistrement PTR s'il existe
-        if reverse_exists:
-            ptr_success = self.delete_record(reverse_zone, ptr_name, "PTR")
-            if not ptr_success:
-                success = False
-                errors.append(f"Échec de suppression de l'enregistrement PTR pour {ip}")
-        
-        if not success:
-            return False, "; ".join(errors)
-            
-        return True, None
 
-    def get_existing_zones(self):
-        """
-        Récupère la liste des zones DNS existantes dans PowerDNS
-
-        Args:
-            powerdns (PowerDNSAPI): Instance de l'API PowerDNS
-
-        Returns:
-            list: Liste des noms de zones sans le point final
-        """
-        zones = self.get_zones()
-        # Nettoyer les noms de zones (enlever le point final)
-        clean_zones = []
-        for zone in zones:
-            name = zone.get("name", "")
-            if name.endswith('.'):
-                name = name[:-1]
-            if name:
-                clean_zones.append(name.lower())
-
-        logger.debug(f"Zones existantes: {clean_zones}")
-        return clean_zones
-
-    def validate_hostname_domain(self, hostname, existing_zones=None):
-        """
-        Valide qu'un hostname correspond à une zone existante
-        En suivant la règle: hostname = nom.domaine où nom n'a pas de point
-        et domaine doit correspondre à une zone existante
-
-        Args:
-            hostname (str): Le hostname à valider
-            existing_zones (list): Liste des zones existantes
-
-        Returns:
-            tuple: (is_valid, domain, error_message)
-        """
-        # S'assurer que le hostname est en minuscules
-        hostname = hostname.lower()
-
-        # Vérifier s'il y a au moins un point dans le hostname
-        if '.' not in hostname:
-            return False, None, "Le hostname doit contenir au moins un domaine (format: nom.domaine)"
-
-        # Diviser en nom et domaine
-        parts = hostname.split('.')
-        name = parts[0]
-        domain = '.'.join(parts[1:])
-
-        # Vérifier que le nom ne contient pas de point
-        if '.' in name:
-            return False, None, f"Le nom '{name}' ne doit pas contenir de point"
-
-        # Vérifier que le domaine correspond à une zone existante
-        if domain not in existing_zones:
-            return False, None, f"Le domaine '{domain}' ne correspond à aucune zone DNS existante"
-
-        return True, domain, None
-
-    def check_dns_records_status(self, fqdn, ip):
-        """
-        Détermine l'état actuel des enregistrements DNS pour une paire hostname/IP
-        avec stratégie de détection de zone améliorée pour une meilleure compatibilité
-
-        Args:
-            powerdns (PowerDNSAPI): Instance de l'API PowerDNS
-            fqdn (str): Nom d'hôte complet
-            ip (str): Adresse IP
-
-        Returns:
-            str: État des enregistrements ('no_records', 'a_only', 'ptr_only', 'both_exist')
-        """
-        # S'assurer que fqdn se termine par un point pour la comparaison DNS
-        if not fqdn.endswith('.'):
-            fqdn_with_dot = f"{fqdn}."
-        else:
-            fqdn_with_dot = fqdn
-
-        # Stratégie flexible pour trouver la zone correcte
-        domain_parts = fqdn_with_dot.split('.')
-
-        # Tester différentes combinaisons de zones possibles, de la plus spécifique à la plus générale
-        possible_zones = []
-
-        # Générer des zones candidates à partir du FQDN
-        for i in range(1, len(domain_parts)):
-            zone_candidate = '.'.join(domain_parts[i:])
-            if zone_candidate:  # Éviter les chaînes vides
-                possible_zones.append(zone_candidate)
-
-        logger.debug(f"Zones possibles pour {fqdn_with_dot}: {possible_zones}")
-
-        # Chercher la première zone qui existe
-        forward_zone = None
-        for zone in possible_zones:
-            if self.ensure_zone_exists(zone):
-                forward_zone = zone
-                logger.debug(f"Zone trouvée: {forward_zone}")
-                break
-
-        if not forward_zone:
-            logger.warning(f"Aucune zone valide trouvée pour {fqdn}. Zones testées: {possible_zones}")
-            return 'no_records'
-
-        # Vérifier l'existence de l'enregistrement A
-        a_record = self.get_record(forward_zone, fqdn_with_dot, "A")
-
-        # Récupérer le nom et la zone PTR
-        ptr_name = self.get_ptr_name_from_ip(ip)
-        reverse_zone = self.get_reverse_zone_from_ip(ip)
-
-        # Vérifier si la zone reverse existe
-        reverse_zone_exists = self.ensure_zone_exists(reverse_zone)
-
-        # Vérifier l'existence de l'enregistrement PTR si la zone existe
-        ptr_record = None
-        if reverse_zone_exists:
-            ptr_record = self.get_record(reverse_zone, ptr_name, "PTR")
-
-        # Déterminer l'état
-        if not a_record and (not reverse_zone_exists or not ptr_record):
-            return 'no_records'
-        elif a_record and (not reverse_zone_exists or not ptr_record):
-            return 'a_only'
-        elif not a_record and reverse_zone_exists and ptr_record:
-            return 'ptr_only'
-        elif a_record and reverse_zone_exists and ptr_record:
-            return 'both_exist'
-
-        # Ce cas ne devrait pas arriver
-        logger.error(f"État indéterminé pour {fqdn} ({ip})")
-        return 'error'
-    
-    def handle_orphaned_ptr(self, fqdn, ip):
-        """
-        Gère le cas d'un enregistrement PTR sans enregistrement A associé
-        Dans ce cas, on supprime le PTR orphelin
-
-        Args:
-            powerdns (PowerDNSAPI): Instance de l'API PowerDNS
-            fqdn (str): Nom d'hôte complet
-            ip (str): Adresse IP
-
-        Returns:
-            bool: True si l'opération a réussi, False sinon
-        """
-        logger.info(f"Suppression du PTR orphelin pour {ip} (pointant vers {fqdn})")
-
-        # Récupérer le nom et la zone PTR
-        ptr_name = self.get_ptr_name_from_ip(ip)
-        reverse_zone = self.get_reverse_zone_from_ip(ip)
-
-        # Supprimer l'enregistrement PTR
-        success = self.delete_record(reverse_zone, ptr_name, "PTR")
-
-        if success:
-            logger.info(f"PTR orphelin supprimé avec succès pour {ip}")
-        else:
-            logger.error(f"Échec de la suppression du PTR orphelin pour {ip}")
-
-        return success
-
-    def create_missing_ptr(self, fqdn, ip):
-        """
-        Crée un enregistrement PTR manquant pour un enregistrement A existant
-
-        Args:
-            powerdns (PowerDNSAPI): Instance de l'API PowerDNS
-            fqdn (str): Nom d'hôte complet
-            ip (str): Adresse IP
-
-        Returns:
-            bool: True si l'opération a réussi, False sinon
-        """
-        logger.info(f"Création du PTR manquant pour {ip} (pointant vers {fqdn})")
-
-        # S'assurer que fqdn se termine par un point
-        if not fqdn.endswith('.'):
-            fqdn = f"{fqdn}."
-
-        # Récupérer le nom et la zone PTR
-        ptr_name = self.get_ptr_name_from_ip(ip)
-        reverse_zone = self.get_reverse_zone_from_ip(ip)
-
-        # Vérifier l'existence de la zone reverse
-        if not self.ensure_zone_exists(reverse_zone):
-            logger.error(f"La zone reverse {reverse_zone} n'existe pas, impossible de créer le PTR")
-            return False
-
-        # Créer l'enregistrement PTR
-        success = self.create_record(reverse_zone, ptr_name, "PTR", fqdn)
-
-        if success:
-            logger.info(f"PTR créé avec succès pour {ip} -> {fqdn}")
-        else:
-            logger.error(f"Échec de la création du PTR pour {ip} -> {fqdn}")
-
-        return success
-
-    def verify_record_consistency(self, fqdn, ip, error_callback=None):
-        """
-        Vérifie la cohérence entre les enregistrements A et PTR existants
-        
-        Args:
-            fqdn (str): Nom d'hôte complet
-            ip (str): Adresse IP
-            error_callback (callable): Fonction de callback pour les erreurs (optionnel)
-        
-        Returns:
-            tuple: (success, corrected, error_message)
-        """
-        logger.info(f"Vérification de la cohérence des enregistrements DNS pour {fqdn} ({ip})")
-
-        # S'assurer que fqdn se termine par un point
-        if not fqdn.endswith('.'):
-            fqdn_with_dot = f"{fqdn}."
-        else:
-            fqdn_with_dot = fqdn
-
-        # Stratégie flexible pour trouver la zone correcte
-        domain_parts = fqdn_with_dot.split('.')
-
-        # Tester différentes combinaisons de zones possibles
-        possible_zones = []
-        for i in range(1, len(domain_parts)):
-            zone_candidate = '.'.join(domain_parts[i:])
-            if zone_candidate:  # Éviter les chaînes vides
-                possible_zones.append(zone_candidate)
-
-        # Chercher la première zone qui existe
-        forward_zone = None
-        for zone in possible_zones:
-            if self.ensure_zone_exists(zone):
-                forward_zone = zone
-                break
-
-        if not forward_zone:
-            error_msg = f"Aucune zone valide trouvée pour {fqdn_with_dot}"
-            logger.warning(error_msg)
-            return False, False, error_msg
-
-        # Récupérer l'enregistrement A
-        a_record = self.get_record(forward_zone, fqdn_with_dot, "A")
-        if not a_record:
-            error_msg = f"Enregistrement A non trouvé pour {fqdn_with_dot}"
-            logger.warning(error_msg)
-            return False, False, error_msg
-
-        # Récupérer le nom et la zone PTR
-        ptr_name = self.get_ptr_name_from_ip(ip)
-        reverse_zone = self.get_reverse_zone_from_ip(ip)
-
-        # Vérifier l'existence de la zone reverse
-        if not self.ensure_zone_exists(reverse_zone):
-            error_msg = f"Zone reverse {reverse_zone} non trouvée"
-            logger.warning(error_msg)
-            return False, False, error_msg
-
-        # Récupérer l'enregistrement PTR
-        ptr_record = self.get_record(reverse_zone, ptr_name, "PTR")
-        if not ptr_record:
-            error_msg = f"Enregistrement PTR non trouvé pour {ip}"
-            logger.warning(error_msg)
-            return False, False, error_msg
-
-        # Vérifier que les enregistrements A et PTR se correspondent
-        a_content = None
-        ptr_content = None
-
-        # Extraire le contenu de l'enregistrement A
-        for record in a_record.get("records", []):
-            if not record.get("disabled", False):
-                a_content = record.get("content")
-                break
-
-        # Extraire le contenu de l'enregistrement PTR
-        for record in ptr_record.get("records", []):
-            if not record.get("disabled", False):
-                ptr_content = record.get("content")
-                break
-
-        # Vérifier la cohérence
-        if not a_content or not ptr_content:
-            error_msg = f"Contenu des enregistrements non trouvé pour {fqdn_with_dot} / {ip}"
-            logger.warning(error_msg)
-            return False, False, error_msg
-
-        if a_content != ip:
-            error_msg = f"L'enregistrement A pointe vers {a_content} mais l'IP attendue est {ip}"
-            logger.warning(error_msg)
-            inconsistent = True
-        elif ptr_content != fqdn_with_dot:
-            error_msg = f"L'enregistrement PTR pointe vers {ptr_content} mais le hostname attendu est {fqdn_with_dot}"
-            logger.warning(error_msg)
-            inconsistent = True
-        else:
-            logger.info(f"Les enregistrements A et PTR sont cohérents pour {fqdn_with_dot} ({ip})")
-            return True, False, None
-
-        # Corriger l'incohérence en recréant les deux enregistrements
-        logger.info(f"Tentative de correction de l'incohérence pour {fqdn_with_dot} ({ip})")
-
-        # Supprimer les enregistrements existants
-        success, delete_error = self.delete_a_ptr_records(fqdn_with_dot, ip)
-        if not success:
-            error_msg = f"Échec de la suppression des enregistrements incohérents: {delete_error}"
-            logger.error(error_msg)
-            return False, False, error_msg
-        else:
-            # Notifier la suppression via callback si fourni
-            if error_callback:
-                error_callback(f"Suppression des enregistrements A et PTR incohérents pour {fqdn_with_dot}")
-
-        # Recréer les enregistrements
-        success, create_error = self.create_a_ptr_records(fqdn_with_dot, ip)
-        if not success:
-            error_msg = f"Échec de la recréation des enregistrements: {create_error}"
-            logger.error(error_msg)
-            return False, False, error_msg
-
-        logger.info(f"Correction réussie des enregistrements DNS pour {fqdn_with_dot} ({ip})")
-        return True, True, None
-    
-    def validate_and_cleanup_hostname(self, hostname, ip):
-        """
-        Valide un hostname contre les zones existantes et nettoie si invalide
-        
-        Args:
-            hostname (str): Hostname à valider
-            ip (str): IP associée
-            
-        Returns:
-            tuple: (is_valid, error_message, cleanup_success)
-        """
-        existing_zones = self.get_existing_zones_cached()
-        is_valid, domain, error = self.validate_hostname_domain(hostname, existing_zones)
-        
-        if is_valid:
-            return True, None, True
-        
-        # Hostname invalide, nettoyer les enregistrements existants
-        logger.warning(f"Hostname invalide '{hostname}': {error}")
-        
-        # Nettoyer PTR
-        ptr_name = self.get_ptr_name_from_ip(ip)
-        reverse_zone = self.get_reverse_zone_from_ip(ip)
-        ptr_exists = self.ensure_zone_exists(reverse_zone) and self.get_record(reverse_zone, ptr_name, "PTR")
-        
-        # Chercher d'éventuels enregistrements A dans toutes les zones
-        a_records_found = []
-        for zone in existing_zones:
-            zone_with_dot = f"{zone}."
-            if self.ensure_zone_exists(zone_with_dot):
-                a_record = self.get_record(zone_with_dot, f"{hostname}.", "A")
-                if a_record:
-                    a_records_found.append((zone_with_dot, f"{hostname}."))
-        
-        cleanup_success = True
-        
-        # Supprimer le PTR si nécessaire
-        if ptr_exists:
-            logger.info(f"Suppression du PTR invalide pour {ip}")
-            if not self.delete_record(reverse_zone, ptr_name, "PTR"):
-                cleanup_success = False
-        
-        # Supprimer les enregistrements A trouvés
-        for zone, record_name in a_records_found:
-            logger.info(f"Suppression de l'enregistrement A invalide {record_name} dans la zone {zone}")
-            if not self.delete_record(zone, record_name, "A"):
-                cleanup_success = False
-        
-        return False, error, cleanup_success
-
-    def process_dns_consistency(self, hostname, ip, error_callback=None):
-        """
-        Traite la cohérence DNS selon l'état des enregistrements A/PTR
-        
-        Args:
-            hostname (str): Hostname complet
-            ip (str): Adresse IP
-            error_callback (callable): Callback pour les erreurs
-            
-        Returns:
-            tuple: (success, corrected, error_message)
-        """
-        dns_status = self.check_dns_records_status(hostname, ip)
-        
-        if dns_status == 'no_records':
-            logger.info(f"Aucun enregistrement DNS pour {hostname} ({ip}), aucune action nécessaire")
-            return True, False, None
-        
-        elif dns_status == 'ptr_only':
-            success = self.handle_orphaned_ptr(hostname, ip)
-            return success, success, None if success else f"Échec suppression PTR orphelin pour {hostname}"
-        
-        elif dns_status == 'a_only':
-            success = self.create_missing_ptr(hostname, ip)
-            return success, success, None if success else f"Échec création PTR pour {hostname}"
-        
-        elif dns_status == 'both_exist':
-            success, corrected, error_msg = self.verify_record_consistency(hostname, ip, error_callback)
-            if corrected and error_callback:
-                error_callback("Enregistrements DNS incohérents corrigés automatiquement")
-            return success, corrected, error_msg
-        
-        else:
-            error_msg = f"État DNS inconnu: {dns_status}"
-            logger.error(error_msg)
-            return False, False, error_msg
-    
     def close(self):
-        """Ferme proprement la session"""
+        """Ferme la session HTTP"""
         if hasattr(self, 'session'):
             self.session.close()
     
+    def find_zone_for_hostname(self, hostname, zones):
+        """
+        Trouve la zone DNS valide pour un hostname avec logique de recherche flexible
+        
+        API: Aucun (traitement local)
+        Params: 
+            hostname (str) - Hostname à analyser
+            zones (list[str]) - Liste des zones disponibles
+        Returns: str|None - Zone trouvée ou None
+        """
+        try:
+            hostname = hostname.lower().strip()
+            
+            # Enlever le point final si présent
+            if hostname.endswith('.'):
+                hostname = hostname[:-1]
+            
+            if '.' not in hostname:
+                return None
+            
+            parts = hostname.split('.')
+            
+            # Tester différentes combinaisons de zones, de la plus spécifique à la plus générale
+            for i in range(1, len(parts)):
+                potential_zone = '.'.join(parts[i:])
+                if potential_zone in zones:
+                    logger.debug(f"Zone trouvée pour {hostname}: {potential_zone}")
+                    return potential_zone
+            
+            logger.debug(f"Aucune zone trouvée pour {hostname}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Erreur find_zone_for_hostname {hostname}: {e}")
+            return None
+
     def __del__(self):
-        """Destructeur pour fermer la session automatiquement"""
+        """Destructeur"""
         self.close()

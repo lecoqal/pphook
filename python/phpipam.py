@@ -2,79 +2,56 @@
 # -*- coding: utf-8 -*-
 
 """
- ______  __  __  ______  __  ______  ______  __    __ 
-/\  == \/\ \_\ \/\  == \/\ \/\  == \/\  __ \/\ "-./  \
-\ \  _-/\ \  __ \ \  _-/\ \ \ \  _-/\ \  __ \ \ \-./\ \
- \ \_\   \ \_\ \_\ \_\   \ \_\ \_\   \ \_\ \_\ \_\ \ \_\
-  \/_/    \/_/\/_/\/_/    \/_/\/_/    \/_/\/_/\/_/  \/_/
-                                                       
-Module phpIPAM API pour l'intégration phpIPAM-PowerDNS
-Fonctions:
-- Authentification à l'API phpIPAM
-- Récupération et gestion des adresses IP
-- Récupération des informations de sections et sous-réseaux
+Module phpIPAM API simplifié pour l'intégration phpIPAM-PowerDNS
+Fonctions essentielles uniquement pour performance optimale
 
-Auteur: Lecoq Alexis
+Auteur: Lecoq Alexis  
 Date: 06/05/25
-Version: 1.1
+Version: 2.0
 """
 
 import requests
 import base64
 import logging
-import importlib
 from datetime import datetime, timedelta
-import ipaddress
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
-# Import explicite du module datetime standard
-std_datetime = importlib.import_module('datetime')
-datetime = std_datetime.datetime
-timedelta = std_datetime.timedelta
 
 logger = logging.getLogger("pphook")
 
 class PhpIPAMAPI:
-    """Classe pour interagir avec l'API phpIPAM - Optimisée pour intégration DNS"""
+    """Classe phpIPAM"""
     
-    def __init__(self, api_url, app_id, username, password, config=None):
+    def __init__(self, api_url, app_id, username, password):
         self.api_url = api_url.rstrip('/')
         self.app_id = app_id
         self.username = username
         self.password = password
-        self.config = config
         self.token = None
         self.token_expires = datetime.now()
         self.session = self._create_session()
     
     def _create_session(self):
-        """Crée une session avec pool de connexions et retry automatique"""
+        """Crée une session HTTP optimisée"""
         session = requests.Session()
         
-        # Configuration du retry automatique
         retry_strategy = Retry(
-            total=3,                    # 3 tentatives max
-            backoff_factor=0.5,         # Délai entre tentatives (0.5, 1.0, 2.0 sec)
-            status_forcelist=[429, 500, 502, 503, 504],  # Codes d'erreur à retenter
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST", "PATCH"]
         )
         
-        # Adaptateur HTTP avec retry
         adapter = HTTPAdapter(
             max_retries=retry_strategy,
-            pool_connections=10,        # Pool de 10 connexions
-            pool_maxsize=20            # Max 20 connexions par host
+            pool_connections=10,
+            pool_maxsize=20
         )
         
-        # Appliquer l'adaptateur aux protocoles HTTP et HTTPS
         session.mount("http://", adapter)
         session.mount("https://", adapter)
+        session.timeout = (5, 30)
         
-        # Timeout par défaut pour toutes les requêtes
-        session.timeout = (5, 30)  # (connect_timeout, read_timeout)
-        
-        # Headers par défaut
         session.headers.update({
             'User-Agent': 'PPHOOK/2.0',
             'Accept': 'application/json',
@@ -84,9 +61,13 @@ class PhpIPAMAPI:
         return session
 
     def authenticate(self):
-        """Authentification à l'API phpIPAM"""
-        auth_url = f"{self.api_url}/{self.app_id}/user/"
+        """
+        Authentification à l'API phpIPAM
         
+        API: POST /api/{app_id}/user/
+        Returns: bool - True si succès
+        """
+        auth_url = f"{self.api_url}/{self.app_id}/user/"
         auth_header = base64.b64encode(f"{self.username}:{self.password}".encode()).decode("utf-8")
         headers = {"Authorization": f"Basic {auth_header}"}
         
@@ -97,840 +78,434 @@ class PhpIPAMAPI:
             data = response.json()
             if data["success"]:
                 self.token = data["data"]["token"]
-                
-                # Expiration dans 1 heure 
-                self.token_expires = datetime.now() + timedelta(hours=1)   
-                
-                logger.info(f"Authentification réussie à phpIPAM")
+                self.token_expires = datetime.now() + timedelta(hours=1)
+                logger.info("Authentification phpIPAM réussie")
                 return True
             else:
-                logger.error(f"Échec d'authentification: {data.get('message', 'Erreur inconnue')}")
+                logger.error(f"Échec authentification: {data.get('message')}")
                 return False
         except Exception as e:
-            logger.error(f"Erreur lors de l'authentification à phpIPAM: {str(e)}")
+            logger.error(f"Erreur authentification phpIPAM: {e}")
             return False
     
-    def ensure_auth(self):
-        """S'assure que nous avons un token valide"""
+    def _ensure_auth(self):
+        """S'assure que le token est valide"""
         if self.token is None or datetime.now() >= self.token_expires:
             return self.authenticate()
         return True
     
-    def get_addresses(self, since=None, hostname_filter=None, include_inactive=False):
-        """Récupère les adresses IP depuis phpIPAM"""
-        if not self.ensure_auth():
-            return []
-
-        # Format de l'URL pour récupérer toutes les adresses
-        addresses_url = f"{self.api_url}/{self.app_id}/addresses/"
-
-        headers = {"token": self.token}
-        params = {}
-
-        try:
-            # UTILISER self.session au lieu de requests
-            response = self.session.get(addresses_url, headers=headers, params=params)
-            response.raise_for_status()
-
-            data = response.json()
-            if data["success"]:
-                addresses = data["data"]
-                filtered_addresses = []
-                
-                # Convertir since au format string si c'est un datetime
-                since_str = None
-                if since and isinstance(since, datetime):
-                    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-
-                for addr in addresses:
-                    # Vérifier si l'adresse est active
-                    if not include_inactive and addr.get("state") == "0":
-                        continue
-                        
-                    # Filtrer par date si nécessaire
-                    if since and "editDate" in addr:
-                        # Récupérer la date d'édition avec vérification de validité
-                        edit_date = addr.get("editDate")
-                        
-                        # Si pas de date d'édition ou vide, inclure l'adresse (comportement sécurisé)
-                        if not edit_date or str(edit_date).strip() == "":
-                            logger.warning(f"Date d'édition manquante pour l'adresse {addr.get('ip', 'Unknown')} - inclusion par défaut")
-                            # Pas de continue ici - on laisse l'adresse passer
-                        else:
-                            # Convertir since en string si c'est un datetime
-                            if isinstance(since, datetime):
-                                since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-                            else:
-                                since_str = str(since)
-                                
-                            # Comparer les strings directement - maintenant sécurisé
-                            try:
-                                if edit_date <= since_str:
-                                    continue
-                            except TypeError as e:
-                                # En cas d'erreur de comparaison, logger et inclure l'adresse
-                                logger.warning(f"Erreur de comparaison de date pour l'adresse {addr.get('ip', 'Unknown')}: {e} - inclusion par défaut")
-                            
-                    # Filtrer par hostname si nécessaire
-                    if hostname_filter and hostname_filter.lower() not in addr.get("hostname", "").lower():
-                        continue
-                        
-                    filtered_addresses.append(addr)
-
-                return filtered_addresses
-            else:
-                logger.error(f"Échec de récupération des adresses: {data.get('message', 'Erreur inconnue')}")
-                return []
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des adresses: {str(e)}")
-            return []
-
-    def get_subnets(self):
-        """Récupère tous les subnets depuis phpIPAM"""
-        if not self.ensure_auth():
-            return []
-
-        subnets_url = f"{self.api_url}/{self.app_id}/subnets/"
-        headers = {"token": self.token}
-        
-        try:
-            response = self.session.get(subnets_url, headers=headers)
-            response.raise_for_status()
-
-            data = response.json()
-            if data["success"]:
-                return data["data"]
-            else:
-                logger.error(f"Échec de récupération des subnets: {data.get('message', 'Erreur inconnue')}")
-                return []
-                
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des subnets: {str(e)}")
-            return []   
-  
-    def get_subnet_details(self, subnet_id):
-        """Récupère les détails d'un sous-réseau spécifique"""
-        if not self.ensure_auth():
-            return None
-            
-        subnet_url = f"{self.api_url}/{self.app_id}/subnets/{subnet_id}/"
-        
-        headers = {"token": self.token}
-        
-        try:
-            response = self.session.get(subnet_url, headers=headers)
-            response.raise_for_status()
-            
-            data = response.json()
-            if data["success"]:
-                return data["data"]
-            else:
-                logger.error(f"Échec de récupération des détails du sous-réseau {subnet_id}: {data.get('message', 'Erreur inconnue')}")
-                return None
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des détails du sous-réseau {subnet_id}: {str(e)}")
-            return None
-                                 
-    def get_section_details(self, section_id):
-        """Récupère les détails d'une section"""
-        if not self.ensure_auth():
-            return None
-            
-        section_url = f"{self.api_url}/{self.app_id}/sections/{section_id}/"
-        
-        headers = {"token": self.token}
-        
-        try:
-            response = self.session.get(section_url, headers=headers)
-            response.raise_for_status()
-            
-            data = response.json()
-            if data["success"]:
-                return data["data"]
-            else:
-                logger.error(f"Échec de récupération des détails de la section {section_id}: {data.get('message', 'Erreur inconnue')}")
-                return None
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des détails de la section {section_id}: {str(e)}")
-            return None
-        
-    def get_changelog_entries(self, limit=100):
+    def get_addresses(self, since=None):
         """
-        Récupère les entrées récentes du changelog
+        Récupère les adresses IP depuis phpIPAM
         
-        Args:
-            limit (int): Nombre maximum d'entrées à récupérer
-            
-        Returns:
-            list: Liste des entrées du changelog
+        API: GET /api/{app_id}/addresses/
+        Params: since (datetime) - Filtre par date de modification
+        Returns: list[dict] - Liste des adresses actives
         """
-        if not self.ensure_auth():
+        if not self._ensure_auth():
             return []
-            
-        changelog_url = f"{self.api_url}/{self.app_id}/tools/changelog/"
-        
-        headers = {"token": self.token}
-        params = {"limit": limit}
-        
+
         try:
-            response = self.session.get(changelog_url, headers=headers, params=params)
+            response = self.session.get(
+                f"{self.api_url}/{self.app_id}/addresses/",
+                headers={"token": self.token}
+            )
             response.raise_for_status()
             
             data = response.json()
-            if data["success"]:
-                return data["data"]
-            else:
-                logger.error(f"Échec de récupération du changelog: {data.get('message', 'Erreur inconnue')}")
+            if not data["success"]:
+                logger.error(f"Erreur get_addresses: {data.get('message')}")
                 return []
+            
+            addresses = data["data"]
+            filtered = []
+            
+            since_str = since.strftime("%Y-%m-%d %H:%M:%S") if since else None
+            
+            for addr in addresses:
+                # Filtrer inactives
+                if addr.get("state") == "0":
+                    continue
+                
+                # Filtrer par date
+                if since_str:
+                    edit_date = addr.get("editDate")
+                    if edit_date and edit_date <= since_str:
+                        continue
+                
+                filtered.append(addr)
+            
+            logger.info(f"Récupéré {len(filtered)} adresses depuis phpIPAM")
+            return filtered
+            
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération du changelog: {str(e)}")
+            logger.error(f"Erreur get_addresses: {e}")
             return []
 
     def get_address_changelog(self, address_id):
         """
-        Récupère l'historique des modifications pour une adresse spécifique
+        Récupère l'historique d'une adresse
         
-        Args:
-            address_id (str): ID de l'adresse
-            
-        Returns:
-            list: Liste des modifications pour cette adresse
+        API: GET /api/{app_id}/addresses/{id}/changelog/
+        Params: address_id (str) - ID de l'adresse
+        Returns: list[dict] - Historique des modifications
         """
-        if not self.ensure_auth():
+        if not self._ensure_auth():
             return []
-            
-        changelog_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/changelog/"
-        
-        headers = {"token": self.token}
         
         try:
-            response = self.session.get(changelog_url, headers=headers)
+            response = self.session.get(
+                f"{self.api_url}/{self.app_id}/addresses/{address_id}/changelog/",
+                headers={"token": self.token}
+            )
             response.raise_for_status()
             
             data = response.json()
             if data["success"]:
                 return data["data"]
             else:
-                logger.warning(f"Échec de récupération de l'historique de l'adresse {address_id}: {data.get('message', 'Erreur inconnue')}")
+                logger.debug(f"Pas de changelog pour adresse {address_id}")
                 return []
+                
         except Exception as e:
-            logger.warning(f"Impossible de récupérer l'historique de l'adresse {address_id}: {str(e)}")
-            return []
-        
-    def get_addresses_with_mac_and_dhcp_profil(self):
-        """
-        Récupère toutes les adresses avec MAC non nulle et custom_DHCP_Profil = 'infra' ou 'lise'
-    
-        Returns:
-            list: Liste des adresses avec MAC et profil DHCP, chaque élément contient:
-                - id, ip, hostname, mac, editDate, subnetId, dhcp_profil
-        """
-        try:
-            # Récupérer toutes les adresses
-            all_addresses = self.get_addresses(include_inactive=False)
-        
-            if not all_addresses:
-                logger.info("Aucune adresse trouvée dans phpIPAM")
-                return []
-
-            # Filtrer les adresses avec MAC non nulle et custom_DHCP_Profil valide
-            filtered_addresses = []
-            for address in all_addresses:
-                # Vérifier si MAC n'est pas nulle
-                mac_value = address.get('mac')
-                if mac_value is None or mac_value == '' or str(mac_value).strip() == '':
-                    continue
-
-                # Vérifier custom_DHCP_Profil (CHANGEMENT ICI)
-                dhcp_profil = address.get('custom_DHCP_Profil')
-                if dhcp_profil is None:
-                    continue
-
-                # Conversion sûre en string et vérification des valeurs
-                try:
-                    dhcp_profil_str = str(dhcp_profil).lower().strip()
-                    if dhcp_profil_str not in ['infra', 'lise']:
-                        continue
-                except Exception as e:
-                    logger.warning(f"Erreur conversion custom_DHCP_Profil pour adresse {address.get('id')}: {e}")
-                    continue
-
-                # Ajouter l'adresse avec toutes les infos
-                try:
-                    filtered_addresses.append({
-                        'id': address.get('id'),
-                        'ip': address.get('ip'),
-                        'hostname': address.get('hostname', 'Non défini'),
-                        'mac': str(mac_value).lower().strip(),  # Normaliser la MAC
-                        'editDate': address.get('editDate', 'Non défini'),
-                        'subnetId': address.get('subnetId'),
-                        'dhcp_profil': dhcp_profil_str  # Ajouter le profil DHCP
-                    })
-                except Exception as e:
-                    logger.warning(f"Erreur traitement adresse {address.get('id')}: {e}")
-                    continue
-
-            logger.info(f"Trouvé {len(filtered_addresses)} adresses avec MAC et custom_DHCP_Profil (infra/lise)")
-        
-            # Statistiques par profil
-            infra_count = sum(1 for addr in filtered_addresses if addr['dhcp_profil'] == 'infra')
-            lise_count = sum(1 for addr in filtered_addresses if addr['dhcp_profil'] == 'lise')
-            logger.info(f"Répartition: {infra_count} infra, {lise_count} lise")
-        
-            return filtered_addresses
-
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des adresses DHCP: {str(e)}")
+            logger.debug(f"Erreur changelog adresse {address_id}: {e}")
             return []
 
-    def remove_mac_from_address(self, address_id):
+    def get_all_users(self):
         """
-        Supprime la MAC d'une adresse dans phpIPAM
+        Récupère tous les utilisateurs
         
-        Args:
-            address_id (str): ID de l'adresse
-            
-        Returns:
-            bool: True si la suppression a réussi, False sinon
+        API: GET /api/{app_id}/user/all/
+        Returns: list[dict] - Liste des utilisateurs
         """
-        try:
-            if not self.ensure_auth():
-                return False
-                
-            # URL pour modifier une adresse
-            address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
-            
-            # Headers avec Content-Type JSON
-            headers = {
-                "token": self.token,
-                "Content-Type": "application/json"
-            }
-            
-            payload = {"mac": ""}  # Vider le champ MAC
-            
-            response = self.session.patch(address_url, headers=headers, json=payload)
-            
-            logger.debug(f"Suppression MAC - Status: {response.status_code}")
-            logger.debug(f"Suppression MAC - Raw response: '{response.text}'")
-            
-            # *** CORRECTION: Gestion robuste des réponses ***
-            if response.status_code == 200:
-                response_text = response.text.strip()
-                
-                if not response_text:
-                    logger.info(f"MAC supprimée avec succès pour l'adresse ID {address_id} (réponse vide)")
-                    return True
-                
-                try:
-                    result = response.json()
-                    if result.get("success", True):
-                        logger.info(f"MAC supprimée avec succès pour l'adresse ID {address_id}")
-                        return True
-                    else:
-                        logger.error(f"Échec suppression MAC pour adresse {address_id}: {result.get('message', 'Erreur inconnue')}")
-                        return False
-                except ValueError:
-                    # Réponse non-JSON mais status 200 = probablement succès
-                    logger.info(f"MAC probablement supprimée avec succès pour l'adresse ID {address_id}")
-                    return True
-            else:
-                logger.error(f"Erreur HTTP lors de la suppression MAC: {response.status_code} - {response.text}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Exception lors de la suppression MAC pour adresse {address_id}: {str(e)}")
-            return False
-
-    def get_domain_for_subnet(self, subnet_id):
-        """Détermine le domaine associé à un sous-réseau"""
-        subnet = self.get_subnet_details(subnet_id)
-        if not subnet:
-            return None
-
-        # Vérifier si un domaine est configuré explicitement pour ce sous-réseau
-        if "custom_dnsdomain" in subnet and subnet["custom_dnsdomain"]:
-            return subnet["custom_dnsdomain"]
-
-        # Vérifier si un domaine est configuré pour la section parente
-        if "sectionId" in subnet:
-            section = self.get_section_details(subnet["sectionId"])
-            if section and "custom_dnsdomain" in section and section["custom_dnsdomain"]:
-                return section["custom_dnsdomain"]
-
-        # Utiliser le domaine par défaut défini dans la configuration
-        return self.config.get('default', 'domain', fallback='interne.exemple.com') if self.config else 'interne.exemple.com'
-
-    def build_fqdn(self, hostname, domain):
-        """Construit un FQDN à partir d'un hostname et d'un domaine"""
-        # Si le hostname contient déjà des points, c'est peut-être déjà un FQDN
-        if "." in hostname:
-            # Vérifier si le hostname se termine par le domaine
-            if hostname.lower().endswith(domain.lower()):
-                return hostname
-            else:
-                # C'est un sous-domaine mais pas dans le domaine cible
-                return f"{hostname}.{domain}"
-        else:
-            # Simple hostname, ajouter le domaine
-            return f"{hostname}.{domain}"
-
-    def validate_mac_duplicates(self, notification_callback=None):
-        """
-        Valide les adresses MAC pour détecter les doublons
-        VERSION MODIFIÉE : Supprime la MAC de l'adresse la plus récente
-        
-        Args:
-            notification_callback (callable): Fonction de callback pour les notifications
-                                            Doit accepter un dict avec les infos du doublon
-            
-        Returns:
-            bool: True si la validation s'est bien passée, False sinon
-        """
-        logger.info("Début de la validation des doublons MAC")
+        if not self._ensure_auth():
+            return []
         
         try:
-            # Récupérer les adresses avec MAC et tag infra
-            addresses_with_mac = self.get_addresses_with_mac_and_dhcp_profil()
+            response = self.session.get(
+                f"{self.api_url}/{self.app_id}/user/all/",
+                headers={"token": self.token}
+            )
+            response.raise_for_status()
             
-            if len(addresses_with_mac) < 2:
-                logger.info("Pas assez d'adresses avec MAC pour détecter des doublons")
-                return True
-            
-            # Extraire les MACs
-            macs = [addr['mac'] for addr in addresses_with_mac]
-            
-            # Algorithme de détection de doublons
-            duplicates_found = []
-            processed_macs = set()  # Pour éviter de traiter plusieurs fois la même MAC
-            
-            for i in range(len(macs) - 1):
-                cursor = macs[i]
-                
-                # Skip si cette MAC a déjà été traitée
-                if cursor in processed_macs:
-                    continue
-                    
-                duplicate_addresses = [addresses_with_mac[i]]  # Inclure l'adresse courante
-                
-                # Chercher tous les doublons de cette MAC
-                for j in range(i + 1, len(macs)):
-                    if macs[j] == cursor:
-                        duplicate_addresses.append(addresses_with_mac[j])
-                
-                # Si on a trouvé des doublons
-                if len(duplicate_addresses) > 1:
-                    processed_macs.add(cursor)
-                    
-                    # Trier par date d'édition pour trouver la plus récente
-                    duplicate_addresses.sort(key=lambda x: x['editDate'], reverse=True)
-                    most_recent = duplicate_addresses[-1]  # La plus récente
-                    
-                    logger.warning(f"Doublon MAC détecté: {cursor}")
-                    for addr in duplicate_addresses:
-                        logger.warning(f"  - IP: {addr['ip']} ({addr['hostname']}) - Modifié: {addr['editDate']}")
-                    
-                    # Supprimer la MAC de l'adresse la plus récente
-                    logger.info(f"Suppression de la MAC pour l'adresse la plus récente: {most_recent['ip']}")
-                    success = self.remove_mac_from_address(most_recent['id'])
-                    
-                    if success:
-                        logger.info(f"MAC supprimée avec succès pour l'adresse {most_recent['ip']}")
-                        
-                        # Notifier après suppression si callback fourni
-                        if notification_callback:
-                            duplicate_info = {
-                                'mac': cursor,
-                                'addresses': duplicate_addresses,
-                                'removed_from': most_recent,
-                                'api_url': self.api_url  # Ajout de l'URL API pour construire les liens
-                            }
-                            notification_callback(duplicate_info)
-                        
-                        duplicates_found.append({
-                            'mac': cursor,
-                            'addresses': duplicate_addresses,
-                            'removed_from': most_recent
-                        })
-                    else:
-                        logger.error(f"Échec de suppression de la MAC pour l'adresse {most_recent['ip']}")
-            
-            if duplicates_found:
-                logger.info(f"Validation MAC terminée: {len(duplicates_found)} doublons traités")
+            data = response.json()
+            if data["success"]:
+                return data["data"]
             else:
-                logger.info("Validation MAC terminée: aucun doublon détecté")
+                logger.warning("Impossible de récupérer les utilisateurs")
+                return []
                 
-            return True
-            
         except Exception as e:
-            logger.error(f"Erreur lors de la validation des doublons MAC: {str(e)}")
-            return False
-          
-    def validate_hostname_duplicate(self, ip):
-        """Vérifie s'il y a des duplications d'hostname pour une IP donnée"""
+            logger.error(f"Erreur get_all_users: {e}")
+            return []
+
+    def has_mac_and_dhcp_profil(self, address):
+        """
+        Vérifie si une adresse a une MAC et un profil DHCP valide
+        
+        API: Aucun (validation locale)
+        Params: address (dict) - Adresse à vérifier
+        Returns: tuple (bool, str|None, str|None) - (has_valid, mac, dhcp_profil)
+        """
         try:
-            all_addresses = self.get_addresses(include_inactive=False)
-            target_hostname = None
+            # Vérifier MAC
+            mac_value = address.get('mac')
+            if not mac_value or str(mac_value).strip() == '':
+                return False, None, None
             
-            # Trouver le hostname de l'IP
-            for address in all_addresses:
-                if address.get('ip') == ip and address.get('hostname'):
-                    hostname_value = address.get('hostname')
-                    # Fix: vérifier que hostname n'est pas None
-                    if hostname_value is not None:
-                        target_hostname = hostname_value.lower().strip()
-                        break
+            # Normaliser MAC
+            mac_clean = str(mac_value).lower().strip()
             
-            if not target_hostname:
-                return False, None
+            # Vérifier profil DHCP
+            dhcp_profil = address.get('custom_DHCP_Profil')
+            if not dhcp_profil:
+                return False, mac_clean, None
             
-            # Trouver la première occurrence de duplication (différente de l'IP donnée)
-            for addr in all_addresses:
-                if addr.get('ip') != ip:
-                    # Fix: sécuriser le .lower() avec vérification None
-                    compare_hostname = addr.get('hostname')
-                    if compare_hostname is not None and compare_hostname.lower().strip() == target_hostname:
-                        return True, addr
+            dhcp_profil_clean = str(dhcp_profil).lower().strip()
+            if dhcp_profil_clean not in ['infra', 'lise']:
+                return False, mac_clean, dhcp_profil_clean
             
-            return False, None
+            return True, mac_clean, dhcp_profil_clean
             
         except Exception as e:
-            logger.error(f"Erreur vérification doublons {ip}: {str(e)}")
-            return False, None
+            logger.warning(f"Erreur validation MAC/DHCP pour adresse {address.get('id')}: {e}")
+            return False, None, None
 
     def delete_address(self, ip):
-        """Supprime une adresse IP de phpIPAM"""
+        """
+        Supprime une adresse par son IP
+        
+        API: GET /api/{app_id}/addresses/ + DELETE /api/{app_id}/addresses/{id}/
+        Params: ip (str) - Adresse IP à supprimer
+        Returns: bool - True si suppression réussie
+        """
+        if not self._ensure_auth():
+            return False
+        
         try:
-            if not self.ensure_auth():
-                return False
+            # Trouver l'ID de l'adresse
+            all_addresses = self.get_addresses()  # Utilise le cache si possible
+            address_id = None
             
-            # Trouver l'ID de l'IP
-            all_addresses = self.get_addresses(include_inactive=True)
-            address_id = next((addr.get('id') for addr in all_addresses if addr.get('ip') == ip), None)
+            for addr in all_addresses:
+                if addr.get('ip') == ip:
+                    address_id = addr.get('id')
+                    break
             
             if not address_id:
+                logger.warning(f"Adresse {ip} non trouvée pour suppression")
                 return False
             
-            # Supprimer
-            url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
-            response = self.session.delete(url, headers={"token": self.token})
+            # Supprimer l'adresse
+            response = self.session.delete(
+                f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
+                headers={"token": self.token}
+            )
             
-            return response.status_code == 200 and response.json().get("success", False)
-            
-        except Exception as e:
-            logger.error(f"Erreur suppression {ip}: {str(e)}")
-            return False
-    
-    def get_all_users(self):
-        """Récupère tous les utilisateurs"""
-        if not self.ensure_auth():
-            return []
-        
-        try:
-            response = self.session.get(f"{self.api_url}/{self.app_id}/user/all/", headers={"token": self.token})
-            return response.json()["data"]
-        except:
-            return []
-        
-    def _handle_patch_response(self, response, operation_name):
-        """
-        Méthode helper privée pour gérer les réponses PATCH phpIPAM
-        
-        Args:
-            response: Objet Response de requests
-            operation_name (str): Nom de l'opération pour les logs
-            
-        Returns:
-            bool: True si succès, False sinon
-        """
-        logger.debug(f"{operation_name} - Status: {response.status_code}")
-        logger.debug(f"{operation_name} - Raw response length: {len(response.text)}")
-        logger.debug(f"{operation_name} - Raw response: '{response.text[:200]}...' (truncated)")
-        
-        if response.status_code == 200:
-            response_text = response.text.strip()
-            
-            # *** CORRECTION: Gestion des réponses vraiment vides ***
-            if len(response_text) == 0:
-                logger.debug(f"{operation_name} - Réponse complètement vide (succès)")
-                return True
-            
-            # Vérifier si c'est juste des espaces/retours à la ligne
-            if not response_text:
-                logger.debug(f"{operation_name} - Réponse vide après strip (succès)")
-                return True
-            
-            # Tentative de parsing JSON
-            try:
+            if response.status_code == 200:
                 result = response.json()
-                
-                # Vérifier la structure de la réponse
-                if isinstance(result, dict):
-                    success = result.get("success", True)  # Default True si pas de champ success
-                    if success:
-                        logger.debug(f"{operation_name} - Succès JSON: {result}")
-                        return True
-                    else:
-                        logger.warning(f"{operation_name} - Échec JSON: {result.get('message', 'Erreur inconnue')}")
-                        return False
-                else:
-                    # Réponse JSON mais pas un dict (peut arriver)
-                    logger.debug(f"{operation_name} - JSON non-dict mais status 200 (succès probable): {result}")
+                if result.get("success", False):
+                    logger.info(f"Adresse {ip} supprimée avec succès")
                     return True
-                    
-            except ValueError as json_error:
-                # Réponse non-JSON mais status 200
-                logger.debug(f"{operation_name} - Réponse non-JSON mais status 200: {json_error}")
-                logger.debug(f"{operation_name} - Contenu: '{response_text[:100]}...'")
-                
-                # Si c'est du HTML d'erreur, c'est un échec
-                if response_text.lower().startswith('<!doctype') or response_text.lower().startswith('<html'):
-                    logger.warning(f"{operation_name} - Réponse HTML inattendue (erreur serveur)")
-                    return False
-                
-                # Sinon, on considère que c'est un succès
-                logger.info(f"{operation_name} - Réponse non-JSON acceptée comme succès")
-                return True
-                
-        elif response.status_code == 204:
-            # 204 No Content = succès explicite
-            logger.debug(f"{operation_name} - Status 204 No Content (succès)")
-            return True
             
-        else:
-            logger.warning(f"{operation_name} - Erreur HTTP: {response.status_code}")
-            logger.warning(f"{operation_name} - Message: {response.text[:200]}...")
+            logger.error(f"Échec suppression adresse {ip}: {response.status_code}")
             return False
-
-    def update_address_editdate(self, address_id, new_date=None):
-        """
-        Met à jour l'editDate d'une adresse dans phpIPAM
-        """
-        try:
-            if not self.ensure_auth():
-                return False
-            
-            # *** CORRECTION: Validation de l'ID ***
-            if not address_id or str(address_id).strip() == "":
-                logger.error("ID d'adresse invalide pour mise à jour editDate")
-                return False
-            
-            # Récupérer l'adresse actuelle
-            address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
-            headers = {"token": self.token}
-            
-            get_response = self.session.get(address_url, headers=headers)
-            
-            # *** CORRECTION: Gestion d'erreur plus explicite ***
-            if get_response.status_code == 404:
-                logger.error(f"Adresse {address_id} non trouvée (404) - peut-être supprimée")
-                return False
-            elif get_response.status_code != 200:
-                logger.error(f"Impossible de récupérer l'adresse {address_id}: {get_response.status_code}")
-                return False
-                
-            try:
-                address_data = get_response.json()["data"]
-            except (ValueError, KeyError) as e:
-                logger.error(f"Réponse invalide lors de la récupération de l'adresse {address_id}: {e}")
-                return False
-                
-            current_note = address_data.get('note', '') or ''
-            
-            # Toggle du marqueur pour forcer la mise à jour
-            marker = " [PPHOOK-UPDATE]"
-            if marker in current_note:
-                new_note = current_note.replace(marker, "").strip()
-            else:
-                new_note = (current_note + marker).strip()
-            
-            # Requête PATCH
-            payload = {"note": new_note}
-            patch_headers = {
-                "token": self.token,
-                "Content-Type": "application/json"
-            }
-            
-            response = self.session.patch(address_url, headers=patch_headers, json=payload)
-            
-            # Utilisation de la méthode helper
-            if self._handle_patch_response(response, "Update editDate"):
-                logger.info(f"editDate mis à jour avec succès pour l'adresse ID {address_id}")
-                return True
-            else:
-                logger.error(f"Échec mise à jour editDate pour adresse {address_id}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Exception lors de la mise à jour pour adresse {address_id}: {str(e)}")
-            return False
-
-    def create_changelog_entry(self, address_id):
-        """
-        Crée une entrée changelog en modifiant légèrement l'adresse
-        """
-        try:
-            if not self.ensure_auth():
-                return False
-            
-            # *** CORRECTION: Validation de l'ID ***
-            if not address_id or str(address_id).strip() == "":
-                logger.error("ID d'adresse invalide pour création changelog")
-                return False
-                
-            # Récupérer l'adresse actuelle
-            address_url = f"{self.api_url}/{self.app_id}/addresses/{address_id}/"
-            headers = {"token": self.token}
-            
-            get_response = self.session.get(address_url, headers=headers)
-            
-            # *** CORRECTION: Gestion d'erreur plus explicite ***
-            if get_response.status_code == 404:
-                logger.warning(f"Adresse {address_id} non trouvée pour création changelog (peut-être supprimée)")
-                return False
-            elif get_response.status_code != 200:
-                logger.error(f"Impossible de récupérer l'adresse {address_id} pour créer changelog: {get_response.status_code}")
-                return False
-                
-            try:
-                address_data = get_response.json()["data"]
-            except (ValueError, KeyError) as e:
-                logger.error(f"Réponse invalide lors de la récupération pour changelog {address_id}: {e}")
-                return False
-                
-            # Toggle excludePing pour créer du changelog
-            current_exclude = address_data.get('excludePing', 0)
-            new_exclude = 1 if current_exclude == 0 else 0
-            
-            logger.debug(f"Création changelog pour adresse {address_id}: excludePing {current_exclude} -> {new_exclude}")
-            
-            patch_headers = {
-                "token": self.token,
-                "Content-Type": "application/json"
-            }
-            
-            # Première modification
-            payload1 = {"excludePing": new_exclude}
-            response1 = self.session.patch(address_url, headers=patch_headers, json=payload1)
-            
-            if not self._handle_patch_response(response1, "Première modification changelog"):
-                logger.error(f"Échec première modification pour changelog adresse {address_id}")
-                return False
-            
-            # Remise en état
-            payload2 = {"excludePing": current_exclude}
-            response2 = self.session.patch(address_url, headers=patch_headers, json=payload2)
-            
-            if not self._handle_patch_response(response2, "Remise en état changelog"):
-                logger.warning(f"Échec remise en état pour adresse {address_id}, mais changelog créé")
-            
-            logger.info(f"Changelog factice créé pour l'adresse {address_id}")
-            return True
             
         except Exception as e:
-            logger.error(f"Exception lors de la création changelog pour adresse {address_id}: {str(e)}")
+            logger.error(f"Erreur delete_address {ip}: {e}")
+            return False
+
+    def create_address(self, ip, hostname, subnet_id, **kwargs):
+        """
+        Crée ou met à jour une adresse
+        
+        API: POST /api/{app_id}/addresses/
+        Params: 
+            ip (str) - Adresse IP
+            hostname (str) - Nom d'hôte
+            subnet_id (str) - ID du sous-réseau
+            **kwargs - Champs additionnels (mac, description, etc.)
+        Returns: bool - True si création réussie
+        """
+        if not self._ensure_auth():
+            return False
+        
+        try:
+            payload = {
+                "ip": ip,
+                "hostname": hostname,
+                "subnetId": subnet_id,
+                "state": "2",  # Active par défaut
+                **kwargs
+            }
+            
+            response = self.session.post(
+                f"{self.api_url}/{self.app_id}/addresses/",
+                headers={"token": self.token},
+                json=payload
+            )
+            
+            if response.status_code in [200, 201]:
+                # Gestion des réponses vides de phpIPAM
+                if response.text.strip():
+                    result = response.json()
+                    if result.get("success", True):
+                        logger.info(f"Adresse {ip} créée avec succès")
+                        return True
+                else:
+                    logger.info(f"Adresse {ip} créée avec succès (réponse vide)")
+                    return True
+            
+            logger.error(f"Échec création adresse {ip}: {response.status_code}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Erreur create_address {ip}: {e}")
             return False
     
-    def resolve_hostname_duplicate(self, address, powerdns_api):
+    def find_mac_duplicates(self, addresses):
         """
-        Résout automatiquement les doublons hostname avec stratégie intelligente
+        Trouve tous les doublons MAC dans une liste d'adresses
         
-        Args:
-            address (dict): Adresse à traiter
-            powerdns_api: Instance PowerDNS pour suppression DNS
-            
-        Returns:
-            tuple: (continue_processing, error_info)
-                - continue_processing (bool): True si continuer, False si arrêter
-                - error_info (dict): Infos sur l'erreur si duplicate résolu
+        API: Aucun (traitement local)
+        Params: addresses (list[dict]) - Liste des adresses à analyser
+        Returns: list[tuple] - Liste des paires (addr1, addr2) ayant la même MAC
         """
-        has_duplicate, duplicate_address = self.validate_hostname_duplicate(address.get('ip'))
-        if not has_duplicate:
-            return True, None
+        duplicates = []
+        processed_macs = set()
         
-        logger.warning(f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}.")
-        
-        # Stratégie de résolution des doublons
-        address_to_delete = None
-        resolution_strategy = None
-        
-        # Stratégie 1 : Comparer les dates d'édition si disponibles
         try:
-            current_edit_date = address.get('editDate')
-            duplicate_edit_date = duplicate_address.get('editDate')
+            for i, addr1 in enumerate(addresses):
+                has_mac1, mac1, _ = self.has_mac_and_dhcp_profil(addr1)
+                if not has_mac1 or mac1 in processed_macs:
+                    continue
+                
+                duplicate_group = [addr1]
+                
+                # Chercher tous les doublons de cette MAC
+                for j, addr2 in enumerate(addresses[i+1:], i+1):
+                    has_mac2, mac2, _ = self.has_mac_and_dhcp_profil(addr2)
+                    if has_mac2 and mac1 == mac2:
+                        duplicate_group.append(addr2)
+                
+                # Si doublons trouvés, créer toutes les paires
+                if len(duplicate_group) > 1:
+                    processed_macs.add(mac1)
+                    for k in range(len(duplicate_group)-1):
+                        duplicates.append((duplicate_group[k], duplicate_group[k+1]))
+                    logger.warning(f"Doublon MAC détecté: {mac1} ({len(duplicate_group)} adresses)")
             
-            if not duplicate_edit_date:
-                # Essayer de récupérer depuis le changelog
+            logger.info(f"Trouvé {len(duplicates)} paires de doublons MAC")
+            return duplicates
+            
+        except Exception as e:
+            logger.error(f"Erreur find_mac_duplicates: {e}")
+            return []
+
+    def find_hostname_duplicates(self, addresses):
+        """
+        Trouve tous les doublons hostname dans une liste d'adresses
+        
+        API: Aucun (traitement local)
+        Params: addresses (list[dict]) - Liste des adresses à analyser
+        Returns: list[tuple] - Liste des paires (addr1, addr2) ayant le même hostname
+        """
+        duplicates = []
+        processed_hostnames = set()
+        
+        try:
+            for i, addr1 in enumerate(addresses):
+                hostname1 = addr1.get('hostname')
+                if not hostname1 or hostname1.lower().strip() in processed_hostnames:
+                    continue
+                
+                hostname1_clean = hostname1.lower().strip()
+                duplicate_group = [addr1]
+                
+                # Chercher tous les doublons de ce hostname
+                for j, addr2 in enumerate(addresses[i+1:], i+1):
+                    hostname2 = addr2.get('hostname')
+                    if hostname2 and hostname2.lower().strip() == hostname1_clean:
+                        duplicate_group.append(addr2)
+                
+                # Si doublons trouvés, créer toutes les paires
+                if len(duplicate_group) > 1:
+                    processed_hostnames.add(hostname1_clean)
+                    for k in range(len(duplicate_group)-1):
+                        duplicates.append((duplicate_group[k], duplicate_group[k+1]))
+                    logger.warning(f"Doublon hostname détecté: {hostname1_clean} ({len(duplicate_group)} adresses)")
+            
+            logger.info(f"Trouvé {len(duplicates)} paires de doublons hostname")
+            return duplicates
+            
+        except Exception as e:
+            logger.error(f"Erreur find_hostname_duplicates: {e}")
+            return []
+
+    def determine_most_recent(self, addr1, addr2):
+        """
+        Détermine l'adresse la plus récente entre deux (stratégies multiples)
+        
+        API: Potentiellement GET /addresses/{id}/changelog/ si nécessaire
+        Params: addr1, addr2 (dict) - Deux adresses à comparer
+        Returns: dict - L'adresse la plus récente (celle à supprimer)
+        """
+        try:
+            # Stratégie 1: Comparer les dates d'édition
+            edit_date1 = addr1.get('editDate')
+            edit_date2 = addr2.get('editDate')
+            
+            # Si on n'a pas les dates, essayer de les récupérer depuis le changelog
+            if not edit_date1:
                 try:
-                    changelog_duplicate = self.get_address_changelog(duplicate_address['id'])
-                    if changelog_duplicate and len(changelog_duplicate) > 0:
-                        duplicate_edit_date = changelog_duplicate[-1].get('date')
+                    changelog1 = self.get_address_changelog(addr1.get('id'))
+                    if changelog1:
+                        edit_date1 = changelog1[-1].get('date')
                 except Exception:
                     pass
             
-            # Comparer les dates si on a les deux
-            if current_edit_date and duplicate_edit_date:
-                if current_edit_date > duplicate_edit_date:
-                    address_to_delete = address
-                    resolution_strategy = f"adresse courante plus récente ({current_edit_date} > {duplicate_edit_date})"
+            if not edit_date2:
+                try:
+                    changelog2 = self.get_address_changelog(addr2.get('id'))
+                    if changelog2:
+                        edit_date2 = changelog2[-1].get('date')
+                except Exception:
+                    pass
+            
+            # Comparer les dates si disponibles
+            if edit_date1 and edit_date2:
+                if edit_date1 > edit_date2:
+                    logger.debug(f"Stratégie date: {addr1.get('ip')} plus récent ({edit_date1} > {edit_date2})")
+                    return addr1
                 else:
-                    address_to_delete = duplicate_address
-                    resolution_strategy = f"adresse dupliquée plus récente ({duplicate_edit_date} >= {current_edit_date})"
-        except Exception as e:
-            logger.warning(f"Erreur récupération dates pour résolution doublon: {e}")
-        
-        # Stratégie 2 : Fallback sur l'ID (plus petit = plus ancien)
-        if address_to_delete is None:
+                    logger.debug(f"Stratégie date: {addr2.get('ip')} plus récent ({edit_date2} >= {edit_date1})")
+                    return addr2
+            
+            # Stratégie 2: Comparer les IDs (plus grand = plus récent)
             try:
-                current_id = int(address.get('id', 0))
-                duplicate_id = int(duplicate_address.get('id', 0))
+                id1 = int(addr1.get('id', 0))
+                id2 = int(addr2.get('id', 0))
                 
-                if current_id > duplicate_id:
-                    address_to_delete = address
-                    resolution_strategy = f"ID plus récent ({current_id} > {duplicate_id})"
+                if id1 > id2:
+                    logger.debug(f"Stratégie ID: {addr1.get('ip')} plus récent (ID {id1} > {id2})")
+                    return addr1
                 else:
-                    address_to_delete = duplicate_address
-                    resolution_strategy = f"ID plus ancien ({duplicate_id} >= {current_id})"
-            except Exception as e:
-                logger.warning(f"Erreur comparaison IDs: {e}")
+                    logger.debug(f"Stratégie ID: {addr2.get('ip')} plus récent (ID {id2} >= {id1})")
+                    return addr2
+            except (ValueError, TypeError):
+                pass
+            
+            # Stratégie 3: Dernier recours - retourner la première adresse
+            logger.debug(f"Stratégie fallback: suppression de {addr1.get('ip')}")
+            return addr1
+            
+        except Exception as e:
+            logger.error(f"Erreur determine_most_recent: {e}")
+            return addr1  # Fallback
+
+    def remove_mac_from_address(self, address_id):
+        """
+        Supprime uniquement la MAC d'une adresse (garde le reste)
         
-        # Stratégie 3 : Dernier recours - supprimer l'adresse courante
-        if address_to_delete is None:
-            address_to_delete = address
-            resolution_strategy = "dernier recours (pas de critère de comparaison)"
+        API: PATCH /api/{app_id}/addresses/{id}/
+        Params: address_id (str) - ID de l'adresse
+        Returns: bool - True si suppression réussie
+        """
+        if not self._ensure_auth():
+            return False
         
-        logger.info(f"Résolution doublon hostname: suppression {address_to_delete.get('ip')} (stratégie: {resolution_strategy})")
-        
-        # Supprimer les enregistrements DNS de l'adresse à supprimer
-        hostname_to_delete = address_to_delete.get('hostname')
-        ip_to_delete = address_to_delete.get('ip')
-        
-        if hostname_to_delete and ip_to_delete:
-            logger.info(f"Suppression des enregistrements DNS pour l'hostname dupliqué {hostname_to_delete} ({ip_to_delete})")
-            powerdns_api.delete_a_ptr_records(hostname_to_delete, ip_to_delete)
-        
-        # Supprimer l'adresse déterminée comme étant à supprimer
-        self.delete_address(ip_to_delete)
-        
-        # Préparer les infos d'erreur
-        error_message = f"Hostname dupliqué détecté pour l'IP {address.get('ip')}, hostname: {address.get('hostname')}. Doublon trouvé sur l'IP {duplicate_address['ip']}. Adresse supprimée ({resolution_strategy})"
-        error_info = {
-            'message': error_message,
-            'duplicate_address': duplicate_address,
-            'resolution_strategy': resolution_strategy
-        }
-        
-        # Si l'adresse courante est supprimée, arrêter le traitement
-        if address_to_delete == address:
-            return False, error_info
-        else:
-            logger.info(f"Doublon résolu : adresse {duplicate_address.get('ip')} supprimée, traitement continue pour {address.get('ip')}")
-            return True, None
-        
+        try:
+            payload = {"mac": ""}
+            
+            response = self.session.patch(
+                f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
+                headers={"token": self.token},
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                # Gestion des réponses vides de phpIPAM
+                if response.text.strip():
+                    result = response.json()
+                    if result.get("success", True):
+                        logger.info(f"MAC supprimée avec succès pour adresse ID {address_id}")
+                        return True
+                else:
+                    logger.info(f"MAC supprimée avec succès pour adresse ID {address_id} (réponse vide)")
+                    return True
+            
+            logger.error(f"Échec suppression MAC pour adresse {address_id}: {response.status_code}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Erreur remove_mac_from_address {address_id}: {e}")
+            return False
+
     def close(self):
-        """Ferme proprement la session"""
+        """Ferme la session HTTP"""
         if hasattr(self, 'session'):
             self.session.close()
-    
+
     def __del__(self):
-        """Destructeur pour fermer la session automatiquement"""
+        """Destructeur"""
         self.close()
