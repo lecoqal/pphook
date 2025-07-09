@@ -320,7 +320,7 @@ def notify_mac_duplicate_callback(duplicate_info):
 # =================================================
 
 def process_address(phpipam, powerdns, address, users, zones):
-    """Fonction principale de traitement d'une adresse individuelle - EDITDATE FORCÉE"""
+    """Fonction principale de traitement d'une adresse individuelle - VERSION DEBUG EDITDATE"""
     ip = address.get('ip')
     hostname = address.get('hostname')
     address_id = address.get('id')
@@ -349,127 +349,128 @@ def process_address(phpipam, powerdns, address, users, zones):
         needs_editdate_update = True
         logger.debug(f"Adresse {ip} sans editDate - mise à jour programmée")
     
-    # === FONCTION POUR FORCER EDITDATE ===
-    def force_editdate_if_needed(self, address_id):
-        """
-        Force la mise à jour de l'editDate - VERSION DEBUG
-        """
-        if not self._ensure_auth():
-            logger.error(f"Authentification échouée pour mise à jour editDate {address_id}")
-            return False
-        
-        try:
-            logger.info(f"🔍 DEBUG: Début force_editdate_update pour ID {address_id}")
+    # === FONCTION DEBUG POUR FORCER EDITDATE ===
+    def force_editdate_if_needed(reason=""):
+        if needs_editdate_update:
+            logger.info(f"🔍 DEBUG: Début force_editdate_update pour {ip} ({reason})")
             
-            # Étape 1: Récupérer l'adresse actuelle
-            response = self.session.get(
-                f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
-                headers={"token": self.token}
-            )
-            
-            logger.info(f"🔍 DEBUG: GET response status: {response.status_code}")
-            
-            if response.status_code != 200:
-                logger.error(f"❌ Impossible de récupérer l'adresse {address_id}: {response.status_code}")
-                logger.error(f"❌ Response: {response.text}")
+            if not phpipam._ensure_auth():
+                logger.error(f"❌ Authentification échouée pour {ip}")
                 return False
             
-            data = response.json()
-            logger.info(f"🔍 DEBUG: GET response success: {data.get('success')}")
-            
-            if not data.get("success"):
-                logger.error(f"❌ Erreur API lors de la récupération de l'adresse {address_id}")
-                logger.error(f"❌ Response data: {data}")
-                return False
-            
-            # Récupérer les données actuelles
-            address_data = data["data"]
-            current_description = address_data.get("description") or ""
-            current_editdate = address_data.get("editDate")
-            
-            logger.info(f"🔍 DEBUG: Current description: '{current_description}'")
-            logger.info(f"🔍 DEBUG: Current editDate: '{current_editdate}'")
-            
-            # Étape 2: Ajouter un espace
-            temp_description = current_description + " "
-            
-            logger.info(f"🔍 DEBUG: Tentative PATCH avec description: '{temp_description}'")
-            
-            response = self.session.patch(
-                f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
-                headers={"token": self.token},
-                json={"description": temp_description}
-            )
-            
-            logger.info(f"🔍 DEBUG: PATCH 1 response status: {response.status_code}")
-            logger.info(f"🔍 DEBUG: PATCH 1 response text: {response.text}")
-            
-            if response.status_code != 200:
-                logger.error(f"❌ Échec ajout espace pour adresse {address_id}: {response.status_code}")
-                logger.error(f"❌ Response: {response.text}")
-                return False
-            
-            # Vérifier que la première modification a pris effet
-            if response.text.strip():
-                patch1_data = response.json()
-                logger.info(f"🔍 DEBUG: PATCH 1 success: {patch1_data.get('success')}")
-                if not patch1_data.get("success"):
-                    logger.error(f"❌ PATCH 1 failed: {patch1_data}")
-                    return False
-            
-            # Étape 3: Enlever l'espace (retour à l'état original)
-            logger.info(f"🔍 DEBUG: Tentative PATCH restore avec description: '{current_description}'")
-            
-            response = self.session.patch(
-                f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
-                headers={"token": self.token},
-                json={"description": current_description}
-            )
-            
-            logger.info(f"🔍 DEBUG: PATCH 2 response status: {response.status_code}")
-            logger.info(f"🔍 DEBUG: PATCH 2 response text: {response.text}")
-            
-            if response.status_code == 200:
-                # Vérifier le succès
-                if response.text.strip():
-                    patch2_data = response.json()
-                    logger.info(f"🔍 DEBUG: PATCH 2 success: {patch2_data.get('success')}")
-                    if not patch2_data.get("success"):
-                        logger.error(f"❌ PATCH 2 failed: {patch2_data}")
-                        return False
-                
-                logger.info(f"✅ EditDate forcée avec succès pour adresse {address_id}")
-                
-                # Vérification finale - récupérer l'adresse pour voir si editDate a changé
-                verify_response = self.session.get(
-                    f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
-                    headers={"token": self.token}
+            try:
+                # Étape 1: Récupérer l'adresse actuelle
+                response = phpipam.session.get(
+                    f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
+                    headers={"token": phpipam.token}
                 )
                 
-                if verify_response.status_code == 200:
-                    verify_data = verify_response.json()
-                    if verify_data.get("success"):
-                        new_editdate = verify_data["data"].get("editDate")
-                        logger.info(f"🔍 DEBUG: Nouvelle editDate: '{new_editdate}'")
-                        
-                        if new_editdate != current_editdate:
-                            logger.info(f"✅ EditDate mise à jour avec succès: {current_editdate} → {new_editdate}")
-                            return True
-                        else:
-                            logger.error(f"❌ EditDate n'a pas changé: {current_editdate}")
+                logger.info(f"🔍 DEBUG: GET response status: {response.status_code}")
+                
+                if response.status_code != 200:
+                    logger.error(f"❌ Impossible de récupérer l'adresse {address_id}: {response.status_code}")
+                    logger.error(f"❌ Response: {response.text}")
+                    return False
+                
+                data = response.json()
+                logger.info(f"🔍 DEBUG: GET response success: {data.get('success')}")
+                
+                if not data.get("success"):
+                    logger.error(f"❌ Erreur API lors de la récupération de l'adresse {address_id}")
+                    logger.error(f"❌ Response data: {data}")
+                    return False
+                
+                # Récupérer les données actuelles
+                address_data = data["data"]
+                current_description = address_data.get("description") or ""
+                current_editdate = address_data.get("editDate")
+                
+                logger.info(f"🔍 DEBUG: Current description: '{current_description}'")
+                logger.info(f"🔍 DEBUG: Current editDate: '{current_editdate}'")
+                
+                # Étape 2: Ajouter un espace
+                temp_description = current_description + " "
+                
+                logger.info(f"🔍 DEBUG: Tentative PATCH avec description: '{temp_description}'")
+                
+                response = phpipam.session.patch(
+                    f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
+                    headers={"token": phpipam.token},
+                    json={"description": temp_description}
+                )
+                
+                logger.info(f"🔍 DEBUG: PATCH 1 response status: {response.status_code}")
+                logger.info(f"🔍 DEBUG: PATCH 1 response text: {response.text}")
+                
+                if response.status_code != 200:
+                    logger.error(f"❌ Échec ajout espace pour adresse {address_id}: {response.status_code}")
+                    logger.error(f"❌ Response: {response.text}")
+                    return False
+                
+                # Vérifier que la première modification a pris effet
+                if response.text.strip():
+                    patch1_data = response.json()
+                    logger.info(f"🔍 DEBUG: PATCH 1 success: {patch1_data.get('success')}")
+                    if not patch1_data.get("success"):
+                        logger.error(f"❌ PATCH 1 failed: {patch1_data}")
+                        return False
+                
+                # Étape 3: Enlever l'espace (retour à l'état original)
+                logger.info(f"🔍 DEBUG: Tentative PATCH restore avec description: '{current_description}'")
+                
+                response = phpipam.session.patch(
+                    f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
+                    headers={"token": phpipam.token},
+                    json={"description": current_description}
+                )
+                
+                logger.info(f"🔍 DEBUG: PATCH 2 response status: {response.status_code}")
+                logger.info(f"🔍 DEBUG: PATCH 2 response text: {response.text}")
+                
+                if response.status_code == 200:
+                    # Vérifier le succès
+                    if response.text.strip():
+                        patch2_data = response.json()
+                        logger.info(f"🔍 DEBUG: PATCH 2 success: {patch2_data.get('success')}")
+                        if not patch2_data.get("success"):
+                            logger.error(f"❌ PATCH 2 failed: {patch2_data}")
                             return False
-                
-                return True
-            else:
-                logger.error(f"❌ Échec suppression espace pour adresse {address_id}: {response.status_code}")
-                logger.error(f"❌ Response: {response.text}")
+                    
+                    logger.info(f"✅ EditDate forcée avec succès pour adresse {address_id}")
+                    
+                    # Vérification finale - récupérer l'adresse pour voir si editDate a changé
+                    verify_response = phpipam.session.get(
+                        f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
+                        headers={"token": phpipam.token}
+                    )
+                    
+                    if verify_response.status_code == 200:
+                        verify_data = verify_response.json()
+                        if verify_data.get("success"):
+                            new_editdate = verify_data["data"].get("editDate")
+                            logger.info(f"🔍 DEBUG: Nouvelle editDate: '{new_editdate}'")
+                            
+                            if new_editdate != current_editdate:
+                                logger.info(f"✅ EditDate mise à jour avec succès: {current_editdate} → {new_editdate}")
+                                return True
+                            else:
+                                logger.error(f"❌ EditDate n'a pas changé: {current_editdate}")
+                                return False
+                    
+                    return True
+                else:
+                    logger.error(f"❌ Échec suppression espace pour adresse {address_id}: {response.status_code}")
+                    logger.error(f"❌ Response: {response.text}")
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"❌ Erreur force_editdate_update {address_id}: {e}")
+                import traceback
+                logger.error(f"❌ Traceback: {traceback.format_exc()}")
                 return False
-                
-        except Exception as e:
-            logger.error(f"❌ Erreur force_editdate_update {address_id}: {e}")
-            import traceback
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
-            return False
+        else:
+            logger.debug(f"Pas de mise à jour editDate nécessaire pour {ip}")
+            return True
     
     # === VALIDATION DONNÉES ===
     valid, error_message = validate_address_data(address)
@@ -531,7 +532,7 @@ def process_address(phpipam, powerdns, address, users, zones):
         if corrected:
             logger.info("Action DNS effectuée avec succès")
         
-        # === MISE À JOUR EDITDATE SI TRAITEMENT RÉUSSI ===
+        # === MISE À JOUR EDITDATE ===
         if success:
             force_editdate_if_needed("traitement réussi")
         else:
