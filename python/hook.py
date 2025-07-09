@@ -555,7 +555,7 @@ def reset_last_check():
 # =================================================
 
 def main():
-    """Fonction principale simplifiée avec architecture optimisée"""
+    """Fonction principale"""
     logger.info("Démarrage du script d'intégration phpIPAM-PowerDNS")
     
     success_count = 0
@@ -638,7 +638,11 @@ def main():
             reverse_zone = powerdns.get_reverse_zone_from_ip(ip)
             ptr_name = powerdns.get_ptr_name_from_ip(ip)
             if reverse_zone and ptr_name:
-                powerdns.delete_record(reverse_zone, ptr_name, "PTR")
+                reverse_zone_clean = reverse_zone.rstrip('.')
+                if reverse_zone_clean in zones:
+                    powerdns.delete_record(reverse_zone, ptr_name, "PTR")
+                else:
+                    logger.debug(f"Zone reverse {reverse_zone} n'existe pas - skip suppression PTR")
             
             # Supprimer l'adresse de phpIPAM
             if phpipam.delete_address(ip):
@@ -657,14 +661,11 @@ def main():
     # =========================================================================
     # PHASE 4: TRAITEMENT INDIVIDUEL
     # =========================================================================
-    logger.info("=== Phase 5: Traitement individuel ===")
+    logger.info("=== Phase 4: Traitement individuel ===")
     
     for address in addresses:
         try: 
-            # Cette fonction se concentrera uniquement sur la cohérence DNS A/PTR
-            # sans validation/nettoyage (déjà fait dans les phases précédentes)
-            
-            success = process_address(address, powerdns, address, users, zones)
+            success = process_address(phpipam, powerdns, address, users, zones)
             
             if success:
                 success_count += 1
@@ -672,7 +673,7 @@ def main():
                 error_count += 1
                 
         except Exception as e:
-            logger.error(f"Erreur traitement DNS pour {address.get('ip')}: {e}")
+            logger.error(f"Erreur traitement pour {address.get('ip')}: {e}")
             error_count += 1
     
     # =========================================================================
@@ -683,7 +684,7 @@ def main():
     logger.info("=== RÉSUMÉ ===")
     logger.info(f"Doublons MAC nettoyés: {mac_cleaned}")
     logger.info(f"Doublons hostname nettoyés: {hostname_cleaned}")
-    logger.info(f"Traitement DNS: {success_count} réussites, {error_count} erreurs")
+    logger.info(f"Traitement individuel: {success_count} réussites, {error_count} erreurs")
     logger.info(f"Traitement terminé")
     
     return 0 if error_count == 0 else 1
