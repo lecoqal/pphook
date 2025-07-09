@@ -320,12 +320,12 @@ def notify_mac_duplicate_callback(duplicate_info):
 # =================================================
 
 def process_address(phpipam, powerdns, address, users, zones):
-    """Fonction principale de traitement d'une adresse individuelle - VERSION SIMPLIFIÉE"""
+    """Fonction principale de traitement d'une adresse individuelle - EDITDATE FORCÉE"""
     ip = address.get('ip')
     hostname = address.get('hostname')
     address_id = address.get('id')
     
-    logger.info(f"=== DÉBUT TRAITEMENT: {ip} ({hostname}) ===")
+    logger.info(f"=== DÉBUT TRAITEMENT: {ip} ({hostname or 'Sans hostname'}) ===")
     
     # === RÉCUPÉRATION INFOS UTILISATEUR ===
     changelog = None
@@ -347,7 +347,19 @@ def process_address(phpipam, powerdns, address, users, zones):
     original_editdate = address.get('editDate')
     if not original_editdate or str(original_editdate).strip() == "":
         needs_editdate_update = True
-        logger.debug(f"Adresse {ip} sans editDate - mise à jour programmée après traitement")
+        logger.debug(f"Adresse {ip} sans editDate - mise à jour programmée")
+    
+    # === FONCTION POUR FORCER EDITDATE ===
+    def force_editdate_if_needed(reason=""):
+        if needs_editdate_update:
+            logger.info(f"Mise à jour editDate pour {ip} ({reason})")
+            if phpipam.force_editdate_update(address_id):
+                logger.debug(f"EditDate mise à jour pour {ip}")
+                return True
+            else:
+                logger.warning(f"Échec mise à jour editDate pour {ip}")
+                return False
+        return True
     
     # === VALIDATION DONNÉES ===
     valid, error_message = validate_address_data(address)
@@ -355,6 +367,9 @@ def process_address(phpipam, powerdns, address, users, zones):
         logger.error(f"Données invalides pour {ip}: {error_message}")
         notify_error(address, hostname, ip, error_message, username, edit_date, action, 
                     user_email=user_email, use_generic_email=use_generic_email)
+        
+        # === FORCER EDITDATE MÊME EN CAS D'ÉCHEC VALIDATION ===
+        force_editdate_if_needed("données invalides")
         return False
     
     # === VALIDATION HOSTNAME/ZONES ===
@@ -366,14 +381,8 @@ def process_address(phpipam, powerdns, address, users, zones):
         
         logger.info(f"Notification envoyée pour hostname manquant: {ip}")
         
-        # === MISE À JOUR EDITDATE MÊME POUR HOSTNAME MANQUANT ===
-        if needs_editdate_update:
-            logger.info(f"Mise à jour editDate pour {ip} (hostname manquant)")
-            if phpipam.force_editdate_update(address_id):
-                logger.debug(f"EditDate mise à jour pour {ip}")
-            else:
-                logger.warning(f"Échec mise à jour editDate pour {ip}")
-        
+        # === FORCER EDITDATE MÊME POUR HOSTNAME MANQUANT ===
+        force_editdate_if_needed("hostname manquant")
         return True  # Considéré comme traité
     
     is_valid, zone, error = powerdns.validate_hostname_domain(hostname, zones)
@@ -387,14 +396,8 @@ def process_address(phpipam, powerdns, address, users, zones):
         
         logger.info(f"Hostname invalide nettoyé: {hostname}")
         
-        # === MISE À JOUR EDITDATE MÊME POUR HOSTNAME INVALIDE ===
-        if needs_editdate_update:
-            logger.info(f"Mise à jour editDate pour {ip} (hostname invalide)")
-            if phpipam.force_editdate_update(address_id):
-                logger.debug(f"EditDate mise à jour pour {ip}")
-            else:
-                logger.warning(f"Échec mise à jour editDate pour {ip}")
-        
+        # === FORCER EDITDATE MÊME POUR HOSTNAME INVALIDE ===
+        force_editdate_if_needed("hostname invalide")
         return cleanup_success
     
     # === TRAITEMENT DNS ===
@@ -408,6 +411,8 @@ def process_address(phpipam, powerdns, address, users, zones):
         
         if status == "error":
             logger.error(f"Erreur vérification DNS pour {hostname}")
+            # === FORCER EDITDATE MÊME EN CAS D'ERREUR DNS ===
+            force_editdate_if_needed("erreur DNS")
             return False
         
         # Traiter selon le cas
@@ -417,18 +422,17 @@ def process_address(phpipam, powerdns, address, users, zones):
             logger.info("Action DNS effectuée avec succès")
         
         # === MISE À JOUR EDITDATE SI TRAITEMENT RÉUSSI ===
-        if success and needs_editdate_update:
-            logger.info(f"Mise à jour editDate pour {ip} (traitement réussi)")
-            if phpipam.force_editdate_update(address_id):
-                logger.debug(f"EditDate mise à jour avec succès pour {ip}")
-            else:
-                logger.warning(f"Échec mise à jour editDate pour {ip}")
-                # Ne pas considérer comme un échec du traitement principal
+        if success:
+            force_editdate_if_needed("traitement réussi")
+        else:
+            force_editdate_if_needed("traitement échoué")
         
         return success
         
     except Exception as e:
         logger.error(f"Erreur traitement DNS pour {hostname}: {e}")
+        # === FORCER EDITDATE MÊME EN CAS D'EXCEPTION ===
+        force_editdate_if_needed("exception traitement")
         return False
     
     finally:
