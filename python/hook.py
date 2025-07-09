@@ -320,7 +320,7 @@ def notify_mac_duplicate_callback(duplicate_info):
 # =================================================
 
 def process_address(phpipam, powerdns, address, users, zones):
-    """Fonction principale de traitement d'une adresse individuelle - VERSION SIMPLIFIÉE"""
+    """Fonction principale de traitement d'une adresse individuelle"""
     ip = address.get('ip')
     hostname = address.get('hostname')
     
@@ -351,17 +351,14 @@ def process_address(phpipam, powerdns, address, users, zones):
     
     # === VALIDATION HOSTNAME/ZONES ===
     if not hostname:
-        logger.warning(f"Hostname manquant pour {ip} - suppression adresse")
+        logger.warning(f"Hostname manquant pour {ip} - notification utilisateur")
         
-        # Supprimer l'adresse de phpIPAM
-        delete_success = phpipam.delete_address(ip)
-        
-        # Notifier l'utilisateur
-        notify_error(address, "Hostname manquant", ip, "Hostname manquant - adresse supprimée", 
+        # Notifier l'utilisateur (pas de suppression)
+        notify_error(address, "Hostname manquant", ip, "Hostname manquant - veuillez corriger cette entrée", 
                     username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
         
-        logger.info(f"Adresse avec hostname manquant supprimée: {ip}")
-        return delete_success
+        logger.info(f"Notification envoyée pour hostname manquant: {ip}")
+        return True  # Considéré comme traité (pas d'erreur technique)
     
     is_valid, zone, error = powerdns.validate_hostname_domain(hostname, zones)
     if not is_valid:

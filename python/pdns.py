@@ -664,6 +664,7 @@ class PowerDNSAPI:
             
             if reverse_zone and ptr_name:
                 reverse_zone_clean = reverse_zone.rstrip('.')
+                # ✅ VÉRIFICATION EXISTENCE ZONE REVERSE (comme dans handle_dns_case)
                 if reverse_zone_clean in zones:
                     logger.debug(f"Suppression PTR record: {ptr_name} dans zone {reverse_zone}")
                     success_ptr = self.delete_record(reverse_zone, ptr_name, "PTR")
