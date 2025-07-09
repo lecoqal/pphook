@@ -398,28 +398,6 @@ def process_address(phpipam, powerdns, address, users, zones):
         return False
     
     finally:
-        # 3) LOG POST-TRAITEMENT POUR VÉRIFIER EDITDATE
-        try:
-            # Récupérer l'adresse mise à jour depuis phpIPAM
-            updated_address = None
-            all_addresses = phpipam.get_addresses()  # Récupérer toutes les adresses
-            for addr in all_addresses:
-                if addr.get('ip') == ip:
-                    updated_address = addr
-                    break
-            
-            if updated_address:
-                final_edit_date = updated_address.get('editDate')
-                if final_edit_date:
-                    logger.debug(f"POST-TRAITEMENT: editDate final pour {ip}: {final_edit_date}")
-                else:
-                    logger.warning(f"POST-TRAITEMENT: editDate toujours manquant pour {ip}")
-            else:
-                logger.warning(f"POST-TRAITEMENT: Impossible de récupérer l'adresse {ip}")
-                
-        except Exception as e:
-            logger.debug(f"Erreur vérification editDate post-traitement: {e}")
-        
         logger.info(f"=== FIN TRAITEMENT: {ip} ===")
 
 def get_user_info_from_changelog(changelog, users):
@@ -582,7 +560,7 @@ def reset_last_check():
 # =================================================
 
 def main():
-    """Fonction principale"""
+    """Fonction principale simplifiée avec architecture optimisée"""
     logger.info("Démarrage du script d'intégration phpIPAM-PowerDNS")
     
     success_count = 0

@@ -402,11 +402,26 @@ class PhpIPAMAPI:
                 # Si doublons trouvés, créer toutes les paires
                 if len(duplicate_group) > 1:
                     processed_hostnames.add(hostname1_clean)
+                    
+                    logger.warning(f"Doublon hostname détecté: {hostname1_clean} ({len(duplicate_group)} adresses)")
+                    
+                    # Afficher toutes les adresses dupliquées
+                    for idx, addr in enumerate(duplicate_group):
+                        logger.info(f"  Adresse {idx+1}: {addr.get('ip')} (ID: {addr.get('id')}, editDate: {addr.get('editDate')})")
+                    
+                    # Déterminer laquelle sera supprimée
+                    most_recent = self.determine_most_recent(duplicate_group[0], duplicate_group[1])
+                    logger.warning(f"  → Adresse à supprimer: {most_recent.get('ip')} (la plus récente)")
+                    
+                    # Créer les paires pour le traitement
                     for k in range(len(duplicate_group)-1):
                         duplicates.append((duplicate_group[k], duplicate_group[k+1]))
-                    logger.warning(f"Doublon hostname détecté: {hostname1_clean} ({len(duplicate_group)} adresses)")
             
-            logger.info(f"Trouvé {len(duplicates)} paires de doublons hostname")
+            if duplicates:
+                logger.info(f"Trouvé {len(duplicates)} paires de doublons hostname - traitement en cours...")
+            else:
+                logger.info("Aucun doublon hostname détecté")
+                
             return duplicates
             
         except Exception as e:

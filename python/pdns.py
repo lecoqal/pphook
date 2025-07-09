@@ -227,14 +227,14 @@ class PowerDNSAPI:
 
     def delete_record(self, zone_name, record_name, record_type):
         """
-        Supprime un enregistrement DNS
+        Supprime un enregistrement DNS (avec vérification d'existence)
         
         API: PATCH /api/v1/servers/{server}/zones/{zone}
         Params:
             zone_name (str) - Nom de la zone
             record_name (str) - Nom de l'enregistrement
             record_type (str) - Type (A, PTR, etc.)
-        Returns: bool - True si succès
+        Returns: bool - True si suppression réussie ou rien à supprimer
         """
         # Normaliser les noms
         if not zone_name.endswith('.'):
@@ -242,15 +242,23 @@ class PowerDNSAPI:
         if not record_name.endswith('.'):
             record_name = f"{record_name}."
         
-        data = {
-            "rrsets": [{
-                "name": record_name,
-                "type": record_type,
-                "changetype": "DELETE"
-            }]
-        }
-        
         try:
+            # Vérifier si l'enregistrement existe avant de le supprimer
+            existing_record = self.get_record(zone_name, record_name, record_type)
+            
+            if not existing_record:
+                logger.debug(f"Aucun enregistrement {record_type} à supprimer pour {record_name}")
+                return True  # Pas d'erreur, juste rien à faire
+            
+            # L'enregistrement existe, procéder à la suppression
+            data = {
+                "rrsets": [{
+                    "name": record_name,
+                    "type": record_type,
+                    "changetype": "DELETE"
+                }]
+            }
+            
             response = self.session.patch(
                 f"{self.api_url}/servers/{self.server}/zones/{zone_name}",
                 headers=self.headers,
@@ -494,6 +502,69 @@ class PowerDNSAPI:
             logger.error(f"Erreur check_dns_status pour {hostname}: {e}")
             return "error", {"error": str(e)}
 
+    def cleanup_invalid_hostname_records(self, hostname, ip, zones):
+        """
+        Nettoie les enregistrements DNS pour un hostname invalide
+        
+        Args:
+            hostname (str): Hostname invalide
+            ip (str): Adresse IP associée
+            zones (list[str]): Liste des zones disponibles
+            
+        Returns:
+            bool: True si nettoyage réussi ou pas d'enregistrements trouvés
+        """
+        try:
+            logger.info(f"Nettoyage enregistrements DNS pour hostname invalide: {hostname}")
+            cleanup_success = True
+            
+            # === NETTOYAGE A RECORD ===
+            found_zone = self.find_zone_for_hostname(hostname, zones)
+            if found_zone:
+                logger.debug(f"Vérification A record: {hostname} dans zone {found_zone}")
+                success, status = self.delete_record_with_check(found_zone, hostname, "A")
+                if status == "deleted":
+                    logger.info("A record supprimé avec succès")
+                elif status == "no_record":
+                    logger.debug("Aucun A record à supprimer")
+                else:
+                    logger.warning("Échec suppression A record")
+                    cleanup_success = False
+            else:
+                logger.debug("Aucune zone trouvée pour vérification A record")
+            
+            # === NETTOYAGE PTR RECORD ===
+            reverse_zone = self.get_reverse_zone_from_ip(ip)
+            ptr_name = self.get_ptr_name_from_ip(ip)
+            
+            if reverse_zone and ptr_name:
+                reverse_zone_clean = reverse_zone.rstrip('.')
+                if reverse_zone_clean in zones:
+                    logger.debug(f"Vérification PTR record: {ptr_name} dans zone {reverse_zone}")
+                    success, status = self.delete_record_with_check(reverse_zone, ptr_name, "PTR")
+                    if status == "deleted":
+                        logger.info("PTR record supprimé avec succès")
+                    elif status == "no_record":
+                        logger.debug("Aucun PTR record à supprimer")
+                    else:
+                        logger.warning("Échec suppression PTR record")
+                        cleanup_success = False
+                else:
+                    logger.debug("Zone reverse n'existe pas - skip vérification PTR")
+            else:
+                logger.debug("Impossible de calculer PTR - skip vérification")
+            
+            if cleanup_success:
+                logger.info(f"Nettoyage terminé avec succès pour {hostname}")
+            else:
+                logger.warning(f"Nettoyage partiellement échoué pour {hostname}")
+            
+            return cleanup_success
+            
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage pour {hostname}: {e}")
+            return False
+
     def handle_dns_case(self, case_type, hostname, ip, details, error_callback=None):
         """
         Traite un cas DNS spécifique selon la logique métier
@@ -548,12 +619,15 @@ class PowerDNSAPI:
                 else:
                     # A record incohérent - supprimer et notifier
                     logger.warning("A record incohérent détecté - suppression et notification")
-                    success = self.delete_record(zone_found, hostname, "A")
-                    if success:
+                    success, status = self.delete_record_with_check(zone_found, hostname, "A")
+                    if status == "deleted":
                         logger.info("A record incohérent supprimé avec succès")
                         if error_callback:
                             error_callback(f"A record incohérent supprimé (pointait vers {a_content} au lieu de {ip})")
                         return True, True
+                    elif status == "no_record":
+                        logger.debug("A record incohérent déjà absent")
+                        return True, False
                     else:
                         logger.error("Échec suppression A record incohérent")
                         return False, False
@@ -567,10 +641,13 @@ class PowerDNSAPI:
                 ptr_name = details.get('ptr_name')
                 
                 if reverse_zone_exists:
-                    success = self.delete_record(reverse_zone, ptr_name, "PTR")
-                    if success:
+                    success, status = self.delete_record_with_check(reverse_zone, ptr_name, "PTR")
+                    if status == "deleted":
                         logger.info("PTR orphelin supprimé avec succès")
                         return True, True
+                    elif status == "no_record":
+                        logger.debug("PTR orphelin déjà absent")
+                        return True, False
                     else:
                         logger.error("Échec suppression PTR orphelin")
                         return False, False
@@ -607,17 +684,23 @@ class PowerDNSAPI:
                     # Incohérents - supprimer les deux et notifier
                     logger.warning("Incohérence A/PTR détectée - suppression des deux et notification")
                     
-                    # Supprimer les deux
-                    delete_a = self.delete_record(zone_found, hostname, "A")
-                    delete_ptr = self.delete_record(reverse_zone, ptr_name, "PTR")
-                    logger.info(f"Suppression A: {'OK' if delete_a else 'ÉCHEC'}, PTR: {'OK' if delete_ptr else 'ÉCHEC'}")
+                    # Supprimer les deux avec vérification
+                    success_a, status_a = self.delete_record_with_check(zone_found, hostname, "A")
+                    success_ptr, status_ptr = self.delete_record_with_check(reverse_zone, ptr_name, "PTR")
                     
-                    success = delete_a and delete_ptr
-                    if success:
+                    logger.info(f"Suppression A: {status_a}, PTR: {status_ptr}")
+                    
+                    any_deleted = (status_a == "deleted" or status_ptr == "deleted")
+                    success = (success_a and success_ptr)
+                    
+                    if success and any_deleted:
                         logger.info("Enregistrements incohérents supprimés")
                         if error_callback:
                             error_callback(f"Enregistrements incohérents supprimés (A={a_content}, PTR={ptr_content})")
                         return True, True
+                    elif success:
+                        logger.info("Aucun enregistrement incohérent trouvé à supprimer")
+                        return True, False
                     else:
                         logger.error("Échec suppression enregistrements incohérents")
                         return False, False
@@ -628,66 +711,6 @@ class PowerDNSAPI:
         except Exception as e:
             logger.error(f"Erreur handle_dns_case {case_type} pour {hostname}: {e}")
             return False, False
-        
-    def cleanup_invalid_hostname_records(self, hostname, ip, zones):
-        """
-        Nettoie les enregistrements DNS pour un hostname invalide
-        
-        Args:
-            hostname (str): Hostname invalide
-            ip (str): Adresse IP associée
-            zones (list[str]): Liste des zones disponibles
-            
-        Returns:
-            bool: True si nettoyage réussi ou pas d'enregistrements trouvés
-        """
-        try:
-            logger.info(f"Nettoyage enregistrements DNS pour hostname invalide: {hostname}")
-            cleanup_success = True
-            
-            # === NETTOYAGE A RECORD ===
-            found_zone = self.find_zone_for_hostname(hostname, zones)
-            if found_zone:
-                logger.debug(f"Suppression A record: {hostname} dans zone {found_zone}")
-                success_a = self.delete_record(found_zone, hostname, "A")
-                if success_a:
-                    logger.info("A record supprimé avec succès")
-                else:
-                    logger.warning("Échec suppression A record")
-                    cleanup_success = False
-            else:
-                logger.debug("Aucune zone trouvée pour suppression A record")
-            
-            # === NETTOYAGE PTR RECORD ===
-            reverse_zone = self.get_reverse_zone_from_ip(ip)
-            ptr_name = self.get_ptr_name_from_ip(ip)
-            
-            if reverse_zone and ptr_name:
-                reverse_zone_clean = reverse_zone.rstrip('.')
-                # ✅ VÉRIFICATION EXISTENCE ZONE REVERSE (comme dans handle_dns_case)
-                if reverse_zone_clean in zones:
-                    logger.debug(f"Suppression PTR record: {ptr_name} dans zone {reverse_zone}")
-                    success_ptr = self.delete_record(reverse_zone, ptr_name, "PTR")
-                    if success_ptr:
-                        logger.info("PTR record supprimé avec succès")
-                    else:
-                        logger.warning("Échec suppression PTR record")
-                        cleanup_success = False
-                else:
-                    logger.debug("Zone reverse n'existe pas - skip suppression PTR")
-            else:
-                logger.debug("Impossible de calculer PTR - skip suppression")
-            
-            if cleanup_success:
-                logger.info(f"Nettoyage terminé avec succès pour {hostname}")
-            else:
-                logger.warning(f"Nettoyage partiellement échoué pour {hostname}")
-            
-            return cleanup_success
-            
-        except Exception as e:
-            logger.error(f"Erreur lors du nettoyage pour {hostname}: {e}")
-            return False
 
     def __del__(self):
         """Destructeur"""
