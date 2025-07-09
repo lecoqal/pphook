@@ -437,66 +437,31 @@ class PhpIPAMAPI:
             logger.error(f"Erreur find_hostname_duplicates: {e}")
             return []
 
-    def determine_most_recent(self, addr1, addr2):
+    def determine_oldest_to_keep(self, addresses_list):
         """
-        Détermine l'adresse la plus récente entre deux (stratégies multiples)
+        Détermine l'adresse la plus ancienne à garder (ne pas supprimer)
         
-        API: Potentiellement GET /addresses/{id}/changelog/ si nécessaire
-        Params: addr1, addr2 (dict) - Deux adresses à comparer
-        Returns: dict - L'adresse la plus récente (celle à supprimer)
+        Params: addresses_list (list) - Liste des adresses dupliquées
+        Returns: dict - L'adresse à garder (la plus ancienne)
         """
-        try:
-            # Stratégie 1: Comparer les dates d'édition
-            edit_date1 = addr1.get('editDate')
-            edit_date2 = addr2.get('editDate')
+        if not addresses_list:
+            return None
+        
+        # Si une seule adresse, la garder
+        if len(addresses_list) == 1:
+            return addresses_list[0]
+        
+        oldest_addr = addresses_list[0]
+        
+        for addr in addresses_list[1:]:
+            # Utiliser determine_most_recent existant (renvoie la plus récente)
+            most_recent = self.determine_most_recent(oldest_addr, addr)
             
-            # Si on n'a pas les dates, essayer de les récupérer depuis le changelog
-            if not edit_date1:
-                try:
-                    changelog1 = self.get_address_changelog(addr1.get('id'))
-                    if changelog1:
-                        edit_date1 = changelog1[-1].get('date')
-                except Exception:
-                    pass
-            
-            if not edit_date2:
-                try:
-                    changelog2 = self.get_address_changelog(addr2.get('id'))
-                    if changelog2:
-                        edit_date2 = changelog2[-1].get('date')
-                except Exception:
-                    pass
-            
-            # Comparer les dates si disponibles
-            if edit_date1 and edit_date2:
-                if edit_date1 > edit_date2:
-                    logger.info(f"Stratégie date: {addr1.get('ip')} plus récent ({edit_date1} > {edit_date2})")
-                    return addr1
-                else:
-                    logger.info(f"Stratégie date: {addr2.get('ip')} plus récent ({edit_date2} >= {edit_date1})")
-                    return addr2
-            
-            # Stratégie 2: Comparer les IDs (plus grand = plus récent)
-            try:
-                id1 = int(addr1.get('id', 0))
-                id2 = int(addr2.get('id', 0))
-                
-                if id1 > id2:
-                    logger.info(f"Stratégie ID: {addr1.get('ip')} plus récent (ID {id1} > {id2})")
-                    return addr1
-                else:
-                    logger.info(f"Stratégie ID: {addr2.get('ip')} plus récent (ID {id2} >= {id1})")
-                    return addr2
-            except (ValueError, TypeError):
-                pass
-            
-            # Stratégie 3: Dernier recours - retourner la première adresse
-            logger.info(f"Stratégie fallback: suppression de {addr1.get('ip')}")
-            return addr1
-            
-        except Exception as e:
-            logger.error(f"Erreur determine_most_recent: {e}")
-            return addr1  # Fallback
+            # Si addr est moins récente qu'oldest_addr, la garder
+            if most_recent == oldest_addr:
+                oldest_addr = addr
+        
+        return oldest_addr
 
     def remove_mac_from_address(self, address_id):
         """
@@ -610,6 +575,66 @@ class PhpIPAMAPI:
         except Exception as e:
             logger.error(f"Erreur force_editdate_update {address_id}: {e}")
             return False
+        
+    def get_user_email_from_changelog(self, changelog, users, generic_email):
+        """
+        Récupère les infos utilisateur depuis un changelog déjà récupéré
+        
+        Args:
+            changelog (list): Changelog de l'adresse
+            users (list): Liste des utilisateurs phpIPAM
+            generic_email (str): Email générique de fallback
+            
+        Returns:
+            tuple: (user_email, username, use_generic_email)
+        """
+        # Essayer d'abord de récupérer l'email utilisateur depuis le changelog
+        if changelog and len(changelog) > 0:
+            try:
+                real_name = changelog[-1]["user"]
+                # Trouver l'email dans la liste des users
+                for user in users:
+                    if user["real_name"] == real_name:
+                        return user["email"], real_name, False
+                
+                # User trouvé dans changelog mais pas dans la liste des users
+                logger.info(f"Utilisateur '{real_name}' trouvé dans changelog mais pas dans la liste des users")
+                
+            except Exception as e:
+                logger.info(f"Erreur extraction utilisateur depuis changelog: {e}")
+        
+        # Fallback sur email générique si :
+        # - Pas de changelog
+        # - Erreur dans le changelog  
+        # - Utilisateur pas trouvé dans la liste
+        if generic_email and generic_email.strip():
+            username = changelog[-1]["user"] if changelog and len(changelog) > 0 else "Utilisateur inconnu"
+            logger.info(f"Utilisation email générique pour utilisateur: {username}")
+            return generic_email, username, True
+        
+        # Aucune solution trouvée
+        logger.warning("Aucun email disponible (ni utilisateur ni générique)")
+        return None, None, False
+
+    def get_changelog_summary(self, changelog, use_generic_email):
+        """
+        Récupère les détails depuis un changelog déjà récupéré
+        
+        Args:
+            changelog (list): Changelog de l'adresse
+            use_generic_email (bool): Si True, retourne des valeurs par défaut
+            
+        Returns:
+            tuple: (edit_date, action)
+        """
+        if use_generic_email or not changelog or len(changelog) == 0:
+            return "Date inconnue", "Action inconnue"
+        
+        try:
+            last_change = changelog[-1]
+            return last_change.get('date', 'Date inconnue'), last_change.get('action', 'Action inconnue')
+        except Exception:
+            return "Date inconnue", "Action inconnue"
 
     def close(self):
         """Ferme la session HTTP"""
