@@ -323,7 +323,7 @@ def notify_mac_duplicate_callback(duplicate_info):
 # -*- coding: utf-8 -*-
 
 def process_address(phpipam, powerdns, address, users, zones):
-    """Fonction principale de traitement d'une adresse individuelle - VERSION SIMPLE"""
+    """Fonction principale de traitement d'une adresse individuelle"""
     ip = address.get('ip')
     hostname = address.get('hostname')
     address_id = address.get('id')
@@ -334,30 +334,29 @@ def process_address(phpipam, powerdns, address, users, zones):
     changelog = None
     try:
         changelog = phpipam.get_address_changelog(address_id)
+        user_email, username, use_generic_email = get_user_info_from_changelog(changelog, users)
+        if not user_email:
+            logger.error(f"Email non disponible pour {address_id}")
+            return False
+        
+        edit_date, action = get_changelog_details(changelog, use_generic_email)
+        logger.info(f"Utilisateur: {username}, Email: {user_email}")
     except Exception as e:
-        logger.debug(f"Impossible de récupérer changelog pour {address_id}: {e}")
-    
-    user_email, username, use_generic_email = get_user_info_from_changelog(changelog, users)
-    if not user_email:
-        logger.error(f"Email non disponible pour {address_id}")
-        return False
-    
-    edit_date, action = get_changelog_details(changelog, use_generic_email)
-    logger.debug(f"Utilisateur: {username}, Email: {user_email}")
+        logger.info(f"Impossible de récupérer changelog pour {address_id}: {e}")
     
     # === VÉRIFIER SI EDITDATE MANQUANTE ===
     needs_editdate_update = False
     original_editdate = address.get('editDate')
     if not original_editdate or str(original_editdate).strip() == "":
         needs_editdate_update = True
-        logger.debug(f"Adresse {ip} sans editDate - mise à jour programmée")
+        logger.info(f"Adresse {ip} sans editDate - mise à jour programmée")
     
     # === FONCTION POUR FORCER EDITDATE ===
     def force_editdate_if_needed(reason=""):
         if needs_editdate_update:
             logger.info(f"Mise à jour editDate pour {ip} ({reason})")
             if phpipam.force_editdate_update(address_id):
-                logger.debug(f"EditDate mise à jour pour {ip}")
+                logger.info(f"EditDate mise à jour pour {ip}")
                 return True
             else:
                 logger.warning(f"Échec mise à jour editDate pour {ip}, peut-être entrée en read-only.")
@@ -375,19 +374,7 @@ def process_address(phpipam, powerdns, address, users, zones):
         force_editdate_if_needed("données invalides")
         return False
     
-    # === VALIDATION HOSTNAME/ZONES ===
-    if not hostname:
-        logger.warning(f"Hostname manquant pour {ip} - notification utilisateur")
-        
-        notify_error(address, "Hostname manquant", ip, "Hostname manquant - veuillez corriger cette entrée", 
-                    username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
-        
-        logger.info(f"Notification envoyée pour hostname manquant: {ip}")
-        
-        # === FORCER EDITDATE MÊME POUR HOSTNAME MANQUANT ===
-        force_editdate_if_needed("hostname manquant")
-        return True  # Considéré comme traité
-    
+    # === VALIDATION HOSTNAME/ZONES ===  
     is_valid, zone, error = powerdns.validate_hostname_domain(hostname, zones)
     if not is_valid:
         logger.warning(f"Hostname invalide: {hostname} - {error}")
@@ -425,10 +412,7 @@ def process_address(phpipam, powerdns, address, users, zones):
             logger.info("Action DNS effectuée avec succès")
         
         # === MISE À JOUR EDITDATE ===
-        if success:
-            force_editdate_if_needed("traitement réussi")
-        else:
-            force_editdate_if_needed("traitement échoué")
+        force_editdate_if_needed("traitement terminé")
         
         return success
         
@@ -454,10 +438,10 @@ def get_user_info_from_changelog(changelog, users):
                     return user["email"], real_name, False
             
             # User trouvé dans changelog mais pas dans la liste des users
-            logger.debug(f"Utilisateur '{real_name}' trouvé dans changelog mais pas dans la liste des users")
+            logger.info(f"Utilisateur '{real_name}' trouvé dans changelog mais pas dans la liste des users")
             
         except Exception as e:
-            logger.debug(f"Erreur extraction utilisateur depuis changelog: {e}")
+            logger.info(f"Erreur extraction utilisateur depuis changelog: {e}")
     
     # Fallback sur email générique si :
     # - Pas de changelog
@@ -465,7 +449,7 @@ def get_user_info_from_changelog(changelog, users):
     # - Utilisateur pas trouvé dans la liste
     if GENERIC_EMAIL and GENERIC_EMAIL.strip():
         username = changelog[-1]["user"] if changelog and len(changelog) > 0 else "Utilisateur inconnu"
-        logger.debug(f"Utilisation email générique pour utilisateur: {username}")
+        logger.info(f"Utilisation email générique pour utilisateur: {username}")
         return GENERIC_EMAIL, username, True
     
     # Aucune solution trouvée
@@ -601,7 +585,7 @@ def reset_last_check():
 # =================================================
 
 def main():
-    """Fonction principale simplifiée avec architecture optimisée et fixes de performance"""
+    """Fonction principale"""
     logger.info("Démarrage du script d'intégration phpIPAM-PowerDNS")
     
     success_count = 0
@@ -688,7 +672,7 @@ def main():
                 if reverse_zone_clean in zones:
                     powerdns.delete_record(reverse_zone, ptr_name, "PTR")
                 else:
-                    logger.debug(f"Zone reverse {reverse_zone} n'existe pas - skip suppression PTR")
+                    logger.info(f"Zone reverse {reverse_zone} n'existe pas - skip suppression PTR")
             
             # FIXE: Supprimer l'adresse avec la liste existante (évite appel API)
             if phpipam.delete_address(ip, addresses):

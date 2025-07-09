@@ -132,7 +132,7 @@ class PhpIPAMAPI:
                 edit_date = addr.get("editDate")
                 if not edit_date or str(edit_date).strip() == "":
                     addresses_without_editdate += 1
-                    logger.debug(f"Adresse sans editDate: {addr.get('ip')} ({addr.get('hostname')})")
+                    logger.info(f"Adresse sans editDate: {addr.get('ip')} ({addr.get('hostname')})")
                 
                 # 2) INCLURE TOUTES LES ADRESSES (même sans editDate)
                 if since_str:
@@ -175,11 +175,11 @@ class PhpIPAMAPI:
             if data["success"]:
                 return data["data"]
             else:
-                logger.debug(f"Pas de changelog pour adresse {address_id}")
+                logger.info(f"Pas de changelog pour adresse {address_id}")
                 return []
                 
         except Exception as e:
-            logger.debug(f"Erreur changelog adresse {address_id}: {e}")
+            logger.info(f"Erreur changelog adresse {address_id}: {e}")
             return []
 
     def get_all_users(self):
@@ -470,10 +470,10 @@ class PhpIPAMAPI:
             # Comparer les dates si disponibles
             if edit_date1 and edit_date2:
                 if edit_date1 > edit_date2:
-                    logger.debug(f"Stratégie date: {addr1.get('ip')} plus récent ({edit_date1} > {edit_date2})")
+                    logger.info(f"Stratégie date: {addr1.get('ip')} plus récent ({edit_date1} > {edit_date2})")
                     return addr1
                 else:
-                    logger.debug(f"Stratégie date: {addr2.get('ip')} plus récent ({edit_date2} >= {edit_date1})")
+                    logger.info(f"Stratégie date: {addr2.get('ip')} plus récent ({edit_date2} >= {edit_date1})")
                     return addr2
             
             # Stratégie 2: Comparer les IDs (plus grand = plus récent)
@@ -482,16 +482,16 @@ class PhpIPAMAPI:
                 id2 = int(addr2.get('id', 0))
                 
                 if id1 > id2:
-                    logger.debug(f"Stratégie ID: {addr1.get('ip')} plus récent (ID {id1} > {id2})")
+                    logger.info(f"Stratégie ID: {addr1.get('ip')} plus récent (ID {id1} > {id2})")
                     return addr1
                 else:
-                    logger.debug(f"Stratégie ID: {addr2.get('ip')} plus récent (ID {id2} >= {id1})")
+                    logger.info(f"Stratégie ID: {addr2.get('ip')} plus récent (ID {id2} >= {id1})")
                     return addr2
             except (ValueError, TypeError):
                 pass
             
             # Stratégie 3: Dernier recours - retourner la première adresse
-            logger.debug(f"Stratégie fallback: suppression de {addr1.get('ip')}")
+            logger.info(f"Stratégie fallback: suppression de {addr1.get('ip')}")
             return addr1
             
         except Exception as e:
@@ -538,12 +538,7 @@ class PhpIPAMAPI:
     
     def force_editdate_update(self, address_id):
         """
-        Force la mise à jour de l'editDate de manière simple
-        Méthode : ajoute un espace puis l'enlève immédiatement
-        
-        API: GET + PATCH + PATCH /api/{app_id}/addresses/{id}/
-        Params: address_id (str) - ID de l'adresse
-        Returns: bool - True si mise à jour réussie
+        Force la mise à jour de l'editDate avec vérification finale
         """
         if not self._ensure_auth():
             return False
@@ -566,6 +561,7 @@ class PhpIPAMAPI:
             
             # Récupérer la description actuelle (ou chaîne vide si None)
             current_description = data["data"].get("description") or ""
+            current_editdate = data["data"].get("editDate")
             
             # Étape 2: Ajouter un espace
             response = self.session.patch(
@@ -585,13 +581,32 @@ class PhpIPAMAPI:
                 json={"description": current_description}
             )
             
-            if response.status_code == 200:
-                logger.debug(f"EditDate forcée avec succès pour adresse {address_id}")
-                return True
-            else:
-                logger.warning(f"Échec suppression espace pour adresse {address_id}")
+            if response.status_code != 200:
+                logger.error(f"Échec suppression espace pour adresse {address_id}")
                 return False
-                
+            
+            # Étape 4: VÉRIFICATION FINALE - Récupérer l'adresse pour vérifier editDate
+            verify_response = self.session.get(
+                f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
+                headers={"token": self.token}
+            )
+            
+            if verify_response.status_code == 200:
+                verify_data = verify_response.json()
+                if verify_data.get("success"):
+                    new_editdate = verify_data["data"].get("editDate")
+                    
+                    # Vérifier que l'editDate a réellement changé
+                    if new_editdate and new_editdate != "None" and new_editdate != current_editdate:
+                        logger.info(f"EditDate mise à jour avec succès pour adresse {address_id}: {current_editdate} → {new_editdate}")
+                        return True
+                    else:
+                        logger.info(f"EditDate non modifiée pour adresse {address_id} (reste: {new_editdate})")
+                        return False
+            
+            logger.error(f"Impossible de vérifier editDate pour adresse {address_id}")
+            return False
+            
         except Exception as e:
             logger.error(f"Erreur force_editdate_update {address_id}: {e}")
             return False

@@ -79,7 +79,7 @@ class PowerDNSAPI:
         if use_cache and self._zones_cache is not None:
             cache_age = time.time() - self._zones_cache_time
             if cache_age < self._zones_cache_ttl:
-                logger.debug(f"Cache DNS hit: {len(self._zones_cache)} zones (âge: {int(cache_age)}s)")
+                logger.info(f"Cache DNS hit: {len(self._zones_cache)} zones (âge: {int(cache_age)}s)")
                 return self._zones_cache.copy()
         
         # Cache manqué ou désactivé - appel API
@@ -111,9 +111,9 @@ class PowerDNSAPI:
             if use_cache and clean:
                 self._zones_cache = result.copy()
                 self._zones_cache_time = time.time()
-                logger.debug(f"Cache DNS mis à jour: {len(result)} zones")
+                logger.info(f"Cache DNS mis à jour: {len(result)} zones")
             
-            logger.debug(f"Récupéré {len(result)} zones DNS depuis l'API")
+            logger.info(f"Récupéré {len(result)} zones DNS depuis l'API")
             return result
                 
         except Exception as e:
@@ -150,7 +150,7 @@ class PowerDNSAPI:
             )
             
             if response.status_code == 404:
-                logger.debug(f"Zone {zone_name} non trouvée")
+                logger.info(f"Zone {zone_name} non trouvée")
                 return None
             
             response.raise_for_status()
@@ -191,7 +191,7 @@ class PowerDNSAPI:
         if existing:
             for record in existing.get("records", []):
                 if not record.get("disabled", False) and record.get("content") == content:
-                    logger.debug(f"Enregistrement {record_name} ({record_type}) déjà correct")
+                    logger.info(f"Enregistrement {record_name} ({record_type}) déjà correct")
                     return True
         
         data = {
@@ -247,7 +247,7 @@ class PowerDNSAPI:
             existing_record = self.get_record(zone_name, record_name, record_type)
             
             if not existing_record:
-                logger.debug(f"Aucun enregistrement {record_type} à supprimer pour {record_name}")
+                logger.info(f"Aucun enregistrement {record_type} à supprimer pour {record_name}")
                 return True  # Pas d'erreur, juste rien à faire
             
             # L'enregistrement existe, procéder à la suppression
@@ -360,11 +360,6 @@ class PowerDNSAPI:
         except ValueError:
             logger.error(f"IP invalide: {ip}")
             return None
-
-    def close(self):
-        """Ferme la session HTTP"""
-        if hasattr(self, 'session'):
-            self.session.close()
     
     def find_zone_for_hostname(self, hostname, zones):
         """
@@ -392,10 +387,10 @@ class PowerDNSAPI:
             for i in range(1, len(parts)):
                 potential_zone = '.'.join(parts[i:])
                 if potential_zone in zones:
-                    logger.debug(f"Zone trouvée pour {hostname}: {potential_zone}")
+                    logger.info(f"Zone trouvée pour {hostname}: {potential_zone}")
                     return potential_zone
             
-            logger.debug(f"Aucune zone trouvée pour {hostname}")
+            logger.info(f"Aucune zone trouvée pour {hostname}")
             return None
             
         except Exception as e:
@@ -442,7 +437,7 @@ class PowerDNSAPI:
                 reverse_zone_clean = reverse_zone.rstrip('.')
                 reverse_zone_exists = reverse_zone_clean in zones
             
-            logger.debug(f"DNS Status Check: zone={zone_found}, reverse_zone={reverse_zone}, reverse_exists={reverse_zone_exists}")
+            logger.info(f"DNS Status Check: zone={zone_found}, reverse_zone={reverse_zone}, reverse_exists={reverse_zone_exists}")
             
             # Vérifier les enregistrements existants
             a_record = self.get_record(zone_found, hostname, "A")
@@ -521,17 +516,17 @@ class PowerDNSAPI:
             # === NETTOYAGE A RECORD ===
             found_zone = self.find_zone_for_hostname(hostname, zones)
             if found_zone:
-                logger.debug(f"Vérification A record: {hostname} dans zone {found_zone}")
+                logger.info(f"Vérification A record: {hostname} dans zone {found_zone}")
                 success, status = self.delete_record_with_check(found_zone, hostname, "A")
                 if status == "deleted":
                     logger.info("A record supprimé avec succès")
                 elif status == "no_record":
-                    logger.debug("Aucun A record à supprimer")
+                    logger.info("Aucun A record à supprimer")
                 else:
                     logger.warning("Échec suppression A record")
                     cleanup_success = False
             else:
-                logger.debug("Aucune zone trouvée pour vérification A record")
+                logger.info("Aucune zone trouvée pour vérification A record")
             
             # === NETTOYAGE PTR RECORD ===
             reverse_zone = self.get_reverse_zone_from_ip(ip)
@@ -540,19 +535,19 @@ class PowerDNSAPI:
             if reverse_zone and ptr_name:
                 reverse_zone_clean = reverse_zone.rstrip('.')
                 if reverse_zone_clean in zones:
-                    logger.debug(f"Vérification PTR record: {ptr_name} dans zone {reverse_zone}")
+                    logger.info(f"Vérification PTR record: {ptr_name} dans zone {reverse_zone}")
                     success, status = self.delete_record_with_check(reverse_zone, ptr_name, "PTR")
                     if status == "deleted":
                         logger.info("PTR record supprimé avec succès")
                     elif status == "no_record":
-                        logger.debug("Aucun PTR record à supprimer")
+                        logger.info("Aucun PTR record à supprimer")
                     else:
                         logger.warning("Échec suppression PTR record")
                         cleanup_success = False
                 else:
-                    logger.debug("Zone reverse n'existe pas - skip vérification PTR")
+                    logger.info("Zone reverse n'existe pas - skip vérification PTR")
             else:
-                logger.debug("Impossible de calculer PTR - skip vérification")
+                logger.info("Impossible de calculer PTR - skip vérification")
             
             if cleanup_success:
                 logger.info(f"Nettoyage terminé avec succès pour {hostname}")
@@ -614,7 +609,7 @@ class PowerDNSAPI:
                             logger.error("Échec création PTR record")
                             return False, False
                     else:
-                        logger.debug("A record cohérent mais zone reverse indisponible - pas de création PTR")
+                        logger.info("A record cohérent mais zone reverse indisponible - pas de création PTR")
                         return True, False
                 else:
                     # A record incohérent - supprimer et notifier
@@ -626,7 +621,7 @@ class PowerDNSAPI:
                             error_callback(f"A record incohérent supprimé (pointait vers {a_content} au lieu de {ip})")
                         return True, True
                     elif status == "no_record":
-                        logger.debug("A record incohérent déjà absent")
+                        logger.info("A record incohérent déjà absent")
                         return True, False
                     else:
                         logger.error("Échec suppression A record incohérent")
@@ -646,13 +641,13 @@ class PowerDNSAPI:
                         logger.info("PTR orphelin supprimé avec succès")
                         return True, True
                     elif status == "no_record":
-                        logger.debug("PTR orphelin déjà absent")
+                        logger.info("PTR orphelin déjà absent")
                         return True, False
                     else:
                         logger.error("Échec suppression PTR orphelin")
                         return False, False
                 else:
-                    logger.debug("Zone reverse n'existe pas - impossible de supprimer PTR orphelin")
+                    logger.info("Zone reverse n'existe pas - impossible de supprimer PTR orphelin")
                     return True, False
                     
             elif case_type == "both_exist":
@@ -711,6 +706,11 @@ class PowerDNSAPI:
         except Exception as e:
             logger.error(f"Erreur handle_dns_case {case_type} pour {hostname}: {e}")
             return False, False
+    
+    def close(self):
+        """Ferme la session HTTP"""
+        if hasattr(self, 'session'):
+            self.session.close()
 
     def __del__(self):
         """Destructeur"""
