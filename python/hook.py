@@ -319,8 +319,11 @@ def notify_mac_duplicate_callback(duplicate_info):
 #  +-----------------------------------------+
 # =================================================
 
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 def process_address(phpipam, powerdns, address, users, zones):
-    """Fonction principale de traitement d'une adresse individuelle - VERSION DEBUG EDITDATE"""
+    """Fonction principale de traitement d'une adresse individuelle - VERSION SIMPLE"""
     ip = address.get('ip')
     hostname = address.get('hostname')
     address_id = address.get('id')
@@ -349,157 +352,17 @@ def process_address(phpipam, powerdns, address, users, zones):
         needs_editdate_update = True
         logger.debug(f"Adresse {ip} sans editDate - mise à jour programmée")
     
-    # === FONCTION DEBUG POUR FORCER EDITDATE ===
+    # === FONCTION POUR FORCER EDITDATE ===
     def force_editdate_if_needed(reason=""):
         if needs_editdate_update:
-            logger.info(f"🔍 DEBUG: Début force_editdate_update pour {ip} ({reason})")
-            
-            if not phpipam._ensure_auth():
-                logger.error(f"❌ Authentification échouée pour {ip}")
+            logger.info(f"Mise à jour editDate pour {ip} ({reason})")
+            if phpipam.force_editdate_update(address_id):
+                logger.debug(f"EditDate mise à jour pour {ip}")
+                return True
+            else:
+                logger.warning(f"Échec mise à jour editDate pour {ip}, peut-être entrée en read-only.")
                 return False
-            
-            try:
-                # Récupérer l'adresse actuelle
-                response = phpipam.session.get(
-                    f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
-                    headers={"token": phpipam.token}
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("success"):
-                        address_data = data["data"]
-                        
-                        # DEBUG: Analyser tous les champs de l'adresse
-                        logger.info(f"🔍 DEBUG: === ANALYSE ADRESSE {ip} ===")
-                        logger.info(f"🔍 DEBUG: ID: {address_data.get('id')}")
-                        logger.info(f"🔍 DEBUG: State: {address_data.get('state')}")
-                        logger.info(f"🔍 DEBUG: SubnetId: {address_data.get('subnetId')}")
-                        logger.info(f"🔍 DEBUG: Owner: {address_data.get('owner')}")
-                        logger.info(f"🔍 DEBUG: EditDate: {address_data.get('editDate')}")
-                        logger.info(f"🔍 DEBUG: LastSeen: {address_data.get('lastSeen')}")
-                        logger.info(f"🔍 DEBUG: Note: {address_data.get('note')}")
-                        
-                        # Chercher des champs inhabituels
-                        special_fields = []
-                        for key, value in address_data.items():
-                            if key.startswith('custom_') or key in ['lock', 'excludePing', 'PTRignore', 'is_gateway']:
-                                special_fields.append(f"{key}: {value}")
-                        
-                        if special_fields:
-                            logger.info(f"🔍 DEBUG: Champs spéciaux: {', '.join(special_fields)}")
-                        
-                        # Vérifier les permissions sur le subnet
-                        subnet_id = address_data.get('subnetId')
-                        if subnet_id:
-                            subnet_response = phpipam.session.get(
-                                f"{phpipam.api_url}/{phpipam.app_id}/subnets/{subnet_id}/",
-                                headers={"token": phpipam.token}
-                            )
-                            if subnet_response.status_code == 200:
-                                subnet_data = subnet_response.json()
-                                if subnet_data.get("success"):
-                                    subnet_info = subnet_data["data"]
-                                    logger.info(f"🔍 DEBUG: Subnet permissions: {subnet_info.get('permissions')}")
-                                    logger.info(f"🔍 DEBUG: Subnet master: {subnet_info.get('masterSubnetId')}")
-                        
-                        # Maintenant essayer la modification simple
-                        current_description = address_data.get("description") or ""
-                        current_editdate = address_data.get("editDate")
-                        
-                        logger.info(f"🔍 DEBUG: Current description: '{current_description}'")
-                        logger.info(f"🔍 DEBUG: Current editDate: '{current_editdate}'")
-                        
-                        # Test 1: Modification description
-                        temp_description = current_description + " "
-                        
-                        logger.info(f"🔍 DEBUG: Test 1 - PATCH description")
-                        response = phpipam.session.patch(
-                            f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
-                            headers={"token": phpipam.token},
-                            json={"description": temp_description}
-                        )
-                        
-                        logger.info(f"🔍 DEBUG: PATCH 1 response: {response.status_code} - {response.text}")
-                        
-                        if response.status_code == 200:
-                            patch_data = response.json()
-                            if patch_data.get("success"):
-                                # Test 2: Vérification immédiate
-                                verify_response = phpipam.session.get(
-                                    f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
-                                    headers={"token": phpipam.token}
-                                )
-                                
-                                if verify_response.status_code == 200:
-                                    verify_data = verify_response.json()
-                                    if verify_data.get("success"):
-                                        new_editdate = verify_data["data"].get("editDate")
-                                        new_description = verify_data["data"].get("description")
-                                        
-                                        logger.info(f"🔍 DEBUG: Après PATCH - editDate: '{new_editdate}'")
-                                        logger.info(f"🔍 DEBUG: Après PATCH - description: '{new_description}'")
-                                        
-                                        if new_editdate and new_editdate != "None":
-                                            logger.info(f"✅ EditDate mise à jour: {current_editdate} → {new_editdate}")
-                                            
-                                            # Restaurer description
-                                            phpipam.session.patch(
-                                                f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
-                                                headers={"token": phpipam.token},
-                                                json={"description": current_description}
-                                            )
-                                            
-                                            return True
-                                        else:
-                                            logger.error(f"❌ EditDate n'a pas changé malgré PATCH réussi")
-                                            
-                                            # Test 3: Essayer de forcer directement editDate
-                                            from datetime import datetime
-                                            forced_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                            
-                                            logger.info(f"🔍 DEBUG: Test 3 - Forçage editDate: {forced_date}")
-                                            
-                                            force_response = phpipam.session.patch(
-                                                f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
-                                                headers={"token": phpipam.token},
-                                                json={"editDate": forced_date}
-                                            )
-                                            
-                                            logger.info(f"🔍 DEBUG: Force editDate response: {force_response.status_code} - {force_response.text}")
-                                            
-                                            if force_response.status_code == 200:
-                                                final_verify = phpipam.session.get(
-                                                    f"{phpipam.api_url}/{phpipam.app_id}/addresses/{address_id}/",
-                                                    headers={"token": phpipam.token}
-                                                )
-                                                
-                                                if final_verify.status_code == 200:
-                                                    final_data = final_verify.json()
-                                                    if final_data.get("success"):
-                                                        final_editdate = final_data["data"].get("editDate")
-                                                        logger.info(f"🔍 DEBUG: Final editDate: '{final_editdate}'")
-                                                        
-                                                        if final_editdate and final_editdate != "None":
-                                                            logger.info(f"✅ EditDate forcée avec succès: {final_editdate}")
-                                                            return True
-                                                        else:
-                                                            logger.error(f"❌ Impossible de modifier editDate - adresse peut-être protégée")
-                                                            return False
-                                            
-                                            return False
-                        else:
-                            logger.error(f"❌ Échec PATCH description: {response.status_code} - {response.text}")
-                            return False
-                            
-            except Exception as e:
-                logger.error(f"❌ Erreur force_editdate_update {address_id}: {e}")
-                import traceback
-                logger.error(f"❌ Traceback: {traceback.format_exc()}")
-                return False
-        else:
-            logger.debug(f"Pas de mise à jour editDate nécessaire pour {ip}")
-            return True
+        return True
     
     # === VALIDATION DONNÉES ===
     valid, error_message = validate_address_data(address)
