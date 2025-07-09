@@ -526,6 +526,66 @@ class PhpIPAMAPI:
         except Exception as e:
             logger.error(f"Erreur remove_mac_from_address {address_id}: {e}")
             return False
+    
+    def force_editdate_update(self, address_id):
+        """
+        Force la mise à jour de l'editDate de manière simple
+        Méthode : ajoute un espace puis l'enlève immédiatement
+        
+        API: GET + PATCH + PATCH /api/{app_id}/addresses/{id}/
+        Params: address_id (str) - ID de l'adresse
+        Returns: bool - True si mise à jour réussie
+        """
+        if not self._ensure_auth():
+            return False
+        
+        try:
+            # Étape 1: Récupérer l'adresse actuelle
+            response = self.session.get(
+                f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
+                headers={"token": self.token}
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Impossible de récupérer l'adresse {address_id}")
+                return False
+            
+            data = response.json()
+            if not data.get("success"):
+                logger.error(f"Erreur API lors de la récupération de l'adresse {address_id}")
+                return False
+            
+            # Récupérer la description actuelle (ou chaîne vide si None)
+            current_description = data["data"].get("description") or ""
+            
+            # Étape 2: Ajouter un espace
+            response = self.session.patch(
+                f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
+                headers={"token": self.token},
+                json={"description": current_description + " "}
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Échec ajout espace pour adresse {address_id}")
+                return False
+            
+            # Étape 3: Enlever l'espace (retour à l'état original)
+            response = self.session.patch(
+                f"{self.api_url}/{self.app_id}/addresses/{address_id}/",
+                headers={"token": self.token},
+                json={"description": current_description}
+            )
+            
+            if response.status_code == 200:
+                logger.debug(f"EditDate forcée avec succès pour adresse {address_id}")
+                return True
+            else:
+                logger.warning(f"Échec suppression espace pour adresse {address_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Erreur force_editdate_update {address_id}: {e}")
+            return False
 
     def close(self):
         """Ferme la session HTTP"""

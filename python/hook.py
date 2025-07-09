@@ -323,23 +323,31 @@ def process_address(phpipam, powerdns, address, users, zones):
     """Fonction principale de traitement d'une adresse individuelle - VERSION SIMPLIFIÉE"""
     ip = address.get('ip')
     hostname = address.get('hostname')
+    address_id = address.get('id')
     
     logger.info(f"=== DÉBUT TRAITEMENT: {ip} ({hostname}) ===")
     
     # === RÉCUPÉRATION INFOS UTILISATEUR ===
     changelog = None
     try:
-        changelog = phpipam.get_address_changelog(address.get('id'))
+        changelog = phpipam.get_address_changelog(address_id)
     except Exception as e:
-        logger.debug(f"Impossible de récupérer changelog pour {address.get('id')}: {e}")
+        logger.debug(f"Impossible de récupérer changelog pour {address_id}: {e}")
     
     user_email, username, use_generic_email = get_user_info_from_changelog(changelog, users)
     if not user_email:
-        logger.error(f"Email non disponible pour {address.get('id')}")
+        logger.error(f"Email non disponible pour {address_id}")
         return False
     
     edit_date, action = get_changelog_details(changelog, use_generic_email)
     logger.debug(f"Utilisateur: {username}, Email: {user_email}")
+    
+    # === VÉRIFIER SI EDITDATE MANQUANTE ===
+    needs_editdate_update = False
+    original_editdate = address.get('editDate')
+    if not original_editdate or str(original_editdate).strip() == "":
+        needs_editdate_update = True
+        logger.debug(f"Adresse {ip} sans editDate - mise à jour programmée après traitement")
     
     # === VALIDATION DONNÉES ===
     valid, error_message = validate_address_data(address)
@@ -353,12 +361,20 @@ def process_address(phpipam, powerdns, address, users, zones):
     if not hostname:
         logger.warning(f"Hostname manquant pour {ip} - notification utilisateur")
         
-        # Notifier l'utilisateur (pas de suppression)
         notify_error(address, "Hostname manquant", ip, "Hostname manquant - veuillez corriger cette entrée", 
                     username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
         
         logger.info(f"Notification envoyée pour hostname manquant: {ip}")
-        return True  # Considéré comme traité (pas d'erreur technique)
+        
+        # === MISE À JOUR EDITDATE MÊME POUR HOSTNAME MANQUANT ===
+        if needs_editdate_update:
+            logger.info(f"Mise à jour editDate pour {ip} (hostname manquant)")
+            if phpipam.force_editdate_update(address_id):
+                logger.debug(f"EditDate mise à jour pour {ip}")
+            else:
+                logger.warning(f"Échec mise à jour editDate pour {ip}")
+        
+        return True  # Considéré comme traité
     
     is_valid, zone, error = powerdns.validate_hostname_domain(hostname, zones)
     if not is_valid:
@@ -370,6 +386,15 @@ def process_address(phpipam, powerdns, address, users, zones):
                     username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
         
         logger.info(f"Hostname invalide nettoyé: {hostname}")
+        
+        # === MISE À JOUR EDITDATE MÊME POUR HOSTNAME INVALIDE ===
+        if needs_editdate_update:
+            logger.info(f"Mise à jour editDate pour {ip} (hostname invalide)")
+            if phpipam.force_editdate_update(address_id):
+                logger.debug(f"EditDate mise à jour pour {ip}")
+            else:
+                logger.warning(f"Échec mise à jour editDate pour {ip}")
+        
         return cleanup_success
     
     # === TRAITEMENT DNS ===
@@ -390,6 +415,15 @@ def process_address(phpipam, powerdns, address, users, zones):
         
         if corrected:
             logger.info("Action DNS effectuée avec succès")
+        
+        # === MISE À JOUR EDITDATE SI TRAITEMENT RÉUSSI ===
+        if success and needs_editdate_update:
+            logger.info(f"Mise à jour editDate pour {ip} (traitement réussi)")
+            if phpipam.force_editdate_update(address_id):
+                logger.debug(f"EditDate mise à jour avec succès pour {ip}")
+            else:
+                logger.warning(f"Échec mise à jour editDate pour {ip}")
+                # Ne pas considérer comme un échec du traitement principal
         
         return success
         
