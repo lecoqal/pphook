@@ -242,26 +242,35 @@ class PhpIPAMAPI:
             logger.warning(f"Erreur validation MAC/DHCP pour adresse {address.get('id')}: {e}")
             return False, None, None
 
-    def delete_address(self, ip):
+    def delete_address(self, ip, addresses=None):
         """
         Supprime une adresse par son IP
         
-        API: GET /api/{app_id}/addresses/ + DELETE /api/{app_id}/addresses/{id}/
-        Params: ip (str) - Adresse IP à supprimer
+        API: DELETE /api/{app_id}/addresses/{id}/
+        Params: 
+            ip (str) - Adresse IP à supprimer
+            addresses (list) - Liste des adresses (évite un appel API)
         Returns: bool - True si suppression réussie
         """
         if not self._ensure_auth():
             return False
         
         try:
-            # Trouver l'ID de l'adresse
-            all_addresses = self.get_addresses()  # Utilise le cache si possible
             address_id = None
             
-            for addr in all_addresses:
-                if addr.get('ip') == ip:
-                    address_id = addr.get('id')
-                    break
+            # Si on a la liste des adresses, l'utiliser
+            if addresses:
+                for addr in addresses:
+                    if addr.get('ip') == ip:
+                        address_id = addr.get('id')
+                        break
+            else:
+                # Fallback : chercher dans toutes les adresses (ancien comportement)
+                all_addresses = self.get_addresses()
+                for addr in all_addresses:
+                    if addr.get('ip') == ip:
+                        address_id = addr.get('id')
+                        break
             
             if not address_id:
                 logger.warning(f"Adresse {ip} non trouvée pour suppression")

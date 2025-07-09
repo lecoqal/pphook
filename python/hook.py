@@ -594,7 +594,7 @@ def reset_last_check():
 # =================================================
 
 def main():
-    """Fonction principale simplifiée avec architecture optimisée"""
+    """Fonction principale simplifiée avec architecture optimisée et fixes de performance"""
     logger.info("Démarrage du script d'intégration phpIPAM-PowerDNS")
     
     success_count = 0
@@ -683,8 +683,8 @@ def main():
                 else:
                     logger.debug(f"Zone reverse {reverse_zone} n'existe pas - skip suppression PTR")
             
-            # Supprimer l'adresse de phpIPAM
-            if phpipam.delete_address(ip):
+            # FIXE: Supprimer l'adresse avec la liste existante (évite appel API)
+            if phpipam.delete_address(ip, addresses):
                 hostname_cleaned += 1
                 # Retirer l'adresse de la liste pour éviter de la traiter plus tard
                 addresses = [addr for addr in addresses if addr.get('ip') != ip]
