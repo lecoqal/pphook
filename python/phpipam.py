@@ -121,19 +121,30 @@ class PhpIPAMAPI:
             filtered = []
             
             since_str = since.strftime("%Y-%m-%d %H:%M:%S") if since else None
+            addresses_without_editdate = 0
             
             for addr in addresses:
                 # Filtrer inactives
                 if addr.get("state") == "0":
                     continue
                 
-                # Filtrer par date
+                # 1) LOG ADRESSES SANS EDITDATE
+                edit_date = addr.get("editDate")
+                if not edit_date or str(edit_date).strip() == "":
+                    addresses_without_editdate += 1
+                    logger.debug(f"Adresse sans editDate: {addr.get('ip')} ({addr.get('hostname')})")
+                
+                # 2) INCLURE TOUTES LES ADRESSES (même sans editDate)
                 if since_str:
-                    edit_date = addr.get("editDate")
+                    # Si pas d'editDate, on inclut quand même (sera traitée)
                     if edit_date and edit_date <= since_str:
                         continue
                 
                 filtered.append(addr)
+            
+            # Log récapitulatif
+            if addresses_without_editdate > 0:
+                logger.info(f"Trouvé {addresses_without_editdate} adresses sans editDate - incluses dans le traitement")
             
             logger.info(f"Récupéré {len(filtered)} adresses depuis phpIPAM")
             return filtered

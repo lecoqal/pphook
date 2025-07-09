@@ -320,7 +320,7 @@ def notify_mac_duplicate_callback(duplicate_info):
 # =================================================
 
 def process_address(phpipam, powerdns, address, users, zones):
-    """Fonction principale de traitement d'une adresse individuelle"""
+    """Fonction principale de traitement d'une adresse individuelle - VERSION SIMPLIFIÉE"""
     ip = address.get('ip')
     hostname = address.get('hostname')
     
@@ -398,33 +398,60 @@ def process_address(phpipam, powerdns, address, users, zones):
         return False
     
     finally:
+        # 3) LOG POST-TRAITEMENT POUR VÉRIFIER EDITDATE
+        try:
+            # Récupérer l'adresse mise à jour depuis phpIPAM
+            updated_address = None
+            all_addresses = phpipam.get_addresses()  # Récupérer toutes les adresses
+            for addr in all_addresses:
+                if addr.get('ip') == ip:
+                    updated_address = addr
+                    break
+            
+            if updated_address:
+                final_edit_date = updated_address.get('editDate')
+                if final_edit_date:
+                    logger.debug(f"POST-TRAITEMENT: editDate final pour {ip}: {final_edit_date}")
+                else:
+                    logger.warning(f"POST-TRAITEMENT: editDate toujours manquant pour {ip}")
+            else:
+                logger.warning(f"POST-TRAITEMENT: Impossible de récupérer l'adresse {ip}")
+                
+        except Exception as e:
+            logger.debug(f"Erreur vérification editDate post-traitement: {e}")
+        
         logger.info(f"=== FIN TRAITEMENT: {ip} ===")
 
 def get_user_info_from_changelog(changelog, users):
     """Récupère les infos utilisateur depuis un changelog déjà récupéré"""
-    if not changelog or len(changelog) == 0:
-        # Fallback sur email générique
-        if GENERIC_EMAIL and GENERIC_EMAIL.strip():
-            return GENERIC_EMAIL, "Utilisateur inconnu", True
-        return None, None, False
     
-    try:
-        real_name = changelog[-1]["user"]
-        # Trouver l'email dans la liste des users
-        for user in users:
-            if user["real_name"] == real_name:
-                return user["email"], real_name, False
-        
-        # User trouvé dans changelog mais pas dans la liste des users
-        if GENERIC_EMAIL and GENERIC_EMAIL.strip():
-            return GENERIC_EMAIL, real_name, True
-        
-        return None, real_name, False
-        
-    except Exception:
-        if GENERIC_EMAIL and GENERIC_EMAIL.strip():
-            return GENERIC_EMAIL, "Utilisateur inconnu", True
-        return None, None, False
+    # Essayer d'abord de récupérer l'email utilisateur depuis le changelog
+    if changelog and len(changelog) > 0:
+        try:
+            real_name = changelog[-1]["user"]
+            # Trouver l'email dans la liste des users
+            for user in users:
+                if user["real_name"] == real_name:
+                    return user["email"], real_name, False
+            
+            # User trouvé dans changelog mais pas dans la liste des users
+            logger.debug(f"Utilisateur '{real_name}' trouvé dans changelog mais pas dans la liste des users")
+            
+        except Exception as e:
+            logger.debug(f"Erreur extraction utilisateur depuis changelog: {e}")
+    
+    # Fallback sur email générique si :
+    # - Pas de changelog
+    # - Erreur dans le changelog  
+    # - Utilisateur pas trouvé dans la liste
+    if GENERIC_EMAIL and GENERIC_EMAIL.strip():
+        username = changelog[-1]["user"] if changelog and len(changelog) > 0 else "Utilisateur inconnu"
+        logger.debug(f"Utilisation email générique pour utilisateur: {username}")
+        return GENERIC_EMAIL, username, True
+    
+    # Aucune solution trouvée
+    logger.warning("Aucun email disponible (ni utilisateur ni générique)")
+    return None, None, False
 
 def get_changelog_details(changelog, use_generic_email):
     """Récupère les détails depuis un changelog déjà récupéré"""
