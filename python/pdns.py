@@ -393,6 +393,300 @@ class PowerDNSAPI:
         except Exception as e:
             logger.error(f"Erreur find_zone_for_hostname {hostname}: {e}")
             return None
+    
+    def check_dns_status(self, hostname, ip, zones):
+        """
+        Vérifie l'état DNS pour un hostname/IP et retourne toutes les infos nécessaires
+        
+        Args:
+            hostname (str): Nom d'hôte
+            ip (str): Adresse IP
+            zones (list[str]): Liste des zones DNS disponibles
+            
+        Returns:
+            tuple: (status, details)
+                status (str): "no_records", "a_only", "ptr_only", "both_exist"
+                details (dict): {
+                    'zone_found': str,
+                    'reverse_zone': str,
+                    'reverse_zone_exists': bool,
+                    'ptr_name': str,
+                    'a_content': str|None,
+                    'ptr_content': str|None,
+                    'a_record': dict|None,
+                    'ptr_record': dict|None
+                }
+        """
+        try:
+            # Trouver la zone forward
+            zone_found = self.find_zone_for_hostname(hostname, zones)
+            if not zone_found:
+                logger.warning(f"Aucune zone trouvée pour {hostname}")
+                return "error", {"error": "No zone found"}
+            
+            # Calculer les infos PTR
+            reverse_zone = self.get_reverse_zone_from_ip(ip)
+            ptr_name = self.get_ptr_name_from_ip(ip)
+            
+            # Vérifier si la zone reverse existe
+            reverse_zone_exists = False
+            if reverse_zone:
+                reverse_zone_clean = reverse_zone.rstrip('.')
+                reverse_zone_exists = reverse_zone_clean in zones
+            
+            logger.debug(f"DNS Status Check: zone={zone_found}, reverse_zone={reverse_zone}, reverse_exists={reverse_zone_exists}")
+            
+            # Vérifier les enregistrements existants
+            a_record = self.get_record(zone_found, hostname, "A")
+            ptr_record = None
+            
+            if reverse_zone_exists and ptr_name:
+                ptr_record = self.get_record(reverse_zone, ptr_name, "PTR")
+            
+            # Extraire les contenus
+            a_content = None
+            ptr_content = None
+            
+            if a_record:
+                for record in a_record.get("records", []):
+                    if not record.get("disabled", False):
+                        a_content = record.get("content")
+                        break
+            
+            if ptr_record:
+                for record in ptr_record.get("records", []):
+                    if not record.get("disabled", False):
+                        ptr_content = record.get("content")
+                        break
+            
+            # Déterminer le statut
+            has_a = a_record is not None
+            has_ptr = ptr_record is not None
+            
+            if not has_a and not has_ptr:
+                status = "no_records"
+            elif has_a and not has_ptr:
+                status = "a_only"
+            elif not has_a and has_ptr:
+                status = "ptr_only"
+            elif has_a and has_ptr:
+                status = "both_exist"
+            else:
+                status = "error"
+            
+            # Préparer les détails
+            details = {
+                'zone_found': zone_found,
+                'reverse_zone': reverse_zone,
+                'reverse_zone_exists': reverse_zone_exists,
+                'ptr_name': ptr_name,
+                'a_content': a_content,
+                'ptr_content': ptr_content,
+                'a_record': a_record,
+                'ptr_record': ptr_record
+            }
+            
+            logger.info(f"DNS Status: {status} (A={has_a}, PTR={has_ptr})")
+            
+            return status, details
+            
+        except Exception as e:
+            logger.error(f"Erreur check_dns_status pour {hostname}: {e}")
+            return "error", {"error": str(e)}
+
+    def handle_dns_case(self, case_type, hostname, ip, details, error_callback=None):
+        """
+        Traite un cas DNS spécifique selon la logique métier
+        
+        Args:
+            case_type (str): "no_records", "a_only", "ptr_only", "both_exist"
+            hostname (str): Nom d'hôte
+            ip (str): Adresse IP
+            details (dict): Détails retournés par check_dns_status()
+            error_callback (callable): Fonction de callback pour les erreurs
+            
+        Returns:
+            tuple: (success, corrected)
+                success (bool): True si l'opération a réussi
+                corrected (bool): True si une correction a été effectuée
+        """
+        try:
+            logger.info(f"Traitement cas DNS: {case_type} pour {hostname} ({ip})")
+            
+            if case_type == "no_records":
+                # CAS 1: Pas d'A ni PTR - Entrée d'inventaire - Ne rien faire
+                logger.info("CAS 1: Aucun enregistrement DNS - entrée d'inventaire - rien à faire")
+                return True, False
+                
+            elif case_type == "a_only":
+                # CAS 2: A existe, pas de PTR - Vérifier cohérence A avant de créer PTR
+                logger.info("CAS 2: A record existe, PTR manquant")
+                
+                a_content = details.get('a_content')
+                zone_found = details.get('zone_found')
+                reverse_zone = details.get('reverse_zone')
+                reverse_zone_exists = details.get('reverse_zone_exists')
+                ptr_name = details.get('ptr_name')
+                
+                logger.info(f"A record contenu: {a_content}, IP IPAM attendue: {ip}")
+                
+                if a_content == ip:
+                    # A record cohérent - créer PTR si zone reverse existe
+                    if reverse_zone_exists:
+                        logger.info("A record cohérent - création PTR manquant")
+                        hostname_with_dot = hostname if hostname.endswith('.') else f"{hostname}."
+                        success = self.create_record(reverse_zone, ptr_name, "PTR", hostname_with_dot)
+                        if success:
+                            logger.info("PTR record créé avec succès")
+                            return True, True
+                        else:
+                            logger.error("Échec création PTR record")
+                            return False, False
+                    else:
+                        logger.debug("A record cohérent mais zone reverse indisponible - pas de création PTR")
+                        return True, False
+                else:
+                    # A record incohérent - supprimer et notifier
+                    logger.warning("A record incohérent détecté - suppression et notification")
+                    success = self.delete_record(zone_found, hostname, "A")
+                    if success:
+                        logger.info("A record incohérent supprimé avec succès")
+                        if error_callback:
+                            error_callback(f"A record incohérent supprimé (pointait vers {a_content} au lieu de {ip})")
+                        return True, True
+                    else:
+                        logger.error("Échec suppression A record incohérent")
+                        return False, False
+                        
+            elif case_type == "ptr_only":
+                # CAS 3: Pas d'A, PTR existe - Supprimer PTR orphelin (sans notification)
+                logger.info("CAS 3: PTR orphelin détecté - suppression sans notification")
+                
+                reverse_zone = details.get('reverse_zone')
+                reverse_zone_exists = details.get('reverse_zone_exists')
+                ptr_name = details.get('ptr_name')
+                
+                if reverse_zone_exists:
+                    success = self.delete_record(reverse_zone, ptr_name, "PTR")
+                    if success:
+                        logger.info("PTR orphelin supprimé avec succès")
+                        return True, True
+                    else:
+                        logger.error("Échec suppression PTR orphelin")
+                        return False, False
+                else:
+                    logger.debug("Zone reverse n'existe pas - impossible de supprimer PTR orphelin")
+                    return True, False
+                    
+            elif case_type == "both_exist":
+                # CAS 4: A et PTR existent - Vérifier cohérence des deux
+                logger.info("CAS 4: A et PTR existent - vérification cohérence")
+                
+                a_content = details.get('a_content')
+                ptr_content = details.get('ptr_content')
+                zone_found = details.get('zone_found')
+                reverse_zone = details.get('reverse_zone')
+                ptr_name = details.get('ptr_name')
+                
+                logger.info(f"A record contenu: {a_content}, PTR record contenu: {ptr_content}")
+                logger.info(f"IPAM attendu: IP={ip}, hostname={hostname}")
+                
+                # Vérifier cohérence complète
+                hostname_with_dot = hostname if hostname.endswith('.') else f"{hostname}."
+                
+                a_coherent = (a_content == ip)
+                ptr_coherent = (ptr_content == hostname_with_dot)
+                
+                logger.info(f"Cohérence: A={a_coherent}, PTR={ptr_coherent}")
+                
+                if a_coherent and ptr_coherent:
+                    # Tout est cohérent - ne rien faire
+                    logger.info("Enregistrements A/PTR parfaitement cohérents")
+                    return True, False
+                else:
+                    # Incohérents - supprimer les deux et notifier
+                    logger.warning("Incohérence A/PTR détectée - suppression des deux et notification")
+                    
+                    # Supprimer les deux
+                    delete_a = self.delete_record(zone_found, hostname, "A")
+                    delete_ptr = self.delete_record(reverse_zone, ptr_name, "PTR")
+                    logger.info(f"Suppression A: {'OK' if delete_a else 'ÉCHEC'}, PTR: {'OK' if delete_ptr else 'ÉCHEC'}")
+                    
+                    success = delete_a and delete_ptr
+                    if success:
+                        logger.info("Enregistrements incohérents supprimés")
+                        if error_callback:
+                            error_callback(f"Enregistrements incohérents supprimés (A={a_content}, PTR={ptr_content})")
+                        return True, True
+                    else:
+                        logger.error("Échec suppression enregistrements incohérents")
+                        return False, False
+            else:
+                logger.error(f"Cas DNS inconnu: {case_type}")
+                return False, False
+                
+        except Exception as e:
+            logger.error(f"Erreur handle_dns_case {case_type} pour {hostname}: {e}")
+            return False, False
+        
+    def cleanup_invalid_hostname_records(self, hostname, ip, zones):
+        """
+        Nettoie les enregistrements DNS pour un hostname invalide
+        
+        Args:
+            hostname (str): Hostname invalide
+            ip (str): Adresse IP associée
+            zones (list[str]): Liste des zones disponibles
+            
+        Returns:
+            bool: True si nettoyage réussi ou pas d'enregistrements trouvés
+        """
+        try:
+            logger.info(f"Nettoyage enregistrements DNS pour hostname invalide: {hostname}")
+            cleanup_success = True
+            
+            # === NETTOYAGE A RECORD ===
+            found_zone = self.find_zone_for_hostname(hostname, zones)
+            if found_zone:
+                logger.debug(f"Suppression A record: {hostname} dans zone {found_zone}")
+                success_a = self.delete_record(found_zone, hostname, "A")
+                if success_a:
+                    logger.info("A record supprimé avec succès")
+                else:
+                    logger.warning("Échec suppression A record")
+                    cleanup_success = False
+            else:
+                logger.debug("Aucune zone trouvée pour suppression A record")
+            
+            # === NETTOYAGE PTR RECORD ===
+            reverse_zone = self.get_reverse_zone_from_ip(ip)
+            ptr_name = self.get_ptr_name_from_ip(ip)
+            
+            if reverse_zone and ptr_name:
+                reverse_zone_clean = reverse_zone.rstrip('.')
+                if reverse_zone_clean in zones:
+                    logger.debug(f"Suppression PTR record: {ptr_name} dans zone {reverse_zone}")
+                    success_ptr = self.delete_record(reverse_zone, ptr_name, "PTR")
+                    if success_ptr:
+                        logger.info("PTR record supprimé avec succès")
+                    else:
+                        logger.warning("Échec suppression PTR record")
+                        cleanup_success = False
+                else:
+                    logger.debug("Zone reverse n'existe pas - skip suppression PTR")
+            else:
+                logger.debug("Impossible de calculer PTR - skip suppression")
+            
+            if cleanup_success:
+                logger.info(f"Nettoyage terminé avec succès pour {hostname}")
+            else:
+                logger.warning(f"Nettoyage partiellement échoué pour {hostname}")
+            
+            return cleanup_success
+            
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage pour {hostname}: {e}")
+            return False
 
     def __del__(self):
         """Destructeur"""
