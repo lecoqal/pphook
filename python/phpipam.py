@@ -343,91 +343,42 @@ class PhpIPAMAPI:
             logger.error(f"Erreur create_address {ip}: {e}")
             return False
     
-    def find_mac_duplicates(self, addresses):
-        """
-        Trouve tous les doublons MAC dans une liste d'adresses
-        
-        API: Aucun (traitement local)
-        Params: addresses (list[dict]) - Liste des adresses à analyser
-        Returns: list[tuple] - Liste des paires (addr1, addr2) ayant la même MAC
-        """
-        duplicates = []
-        processed_macs = set()
-        
-        try:
-            for i, addr1 in enumerate(addresses):
-                has_mac1, mac1, _ = self.has_mac_and_dhcp_profil(addr1)
-                if not has_mac1 or mac1 in processed_macs:
-                    continue
-                
-                duplicate_group = [addr1]
-                
-                # Chercher tous les doublons de cette MAC
-                for j, addr2 in enumerate(addresses[i+1:], i+1):
-                    has_mac2, mac2, _ = self.has_mac_and_dhcp_profil(addr2)
-                    if has_mac2 and mac1 == mac2:
-                        duplicate_group.append(addr2)
-                
-                # Si doublons trouvés, créer toutes les paires
-                if len(duplicate_group) > 1:
-                    processed_macs.add(mac1)
-                    for k in range(len(duplicate_group)-1):
-                        duplicates.append((duplicate_group[k], duplicate_group[k+1]))
-                    logger.warning(f"Doublon MAC détecté: {mac1} ({len(duplicate_group)} adresses)")
-            
-            logger.info(f"Trouvé {len(duplicates)} paires de doublons MAC")
-            return duplicates
-            
-        except Exception as e:
-            logger.error(f"Erreur find_mac_duplicates: {e}")
-            return []
-
     def find_hostname_duplicates(self, addresses):
         """
-        Trouve tous les doublons hostname dans une liste d'adresses
+        Trouve tous les doublons hostname dans une liste d'adresses - VERSION CORRIGÉE
         
         API: Aucun (traitement local)
         Params: addresses (list[dict]) - Liste des adresses à analyser
-        Returns: list[tuple] - Liste des paires (addr1, addr2) ayant le même hostname
+        Returns: dict - {hostname: [list_addresses]} pour chaque hostname dupliqué
         """
-        duplicates = []
-        processed_hostnames = set()
+        hostname_groups = {}
+        duplicates = {}
         
         try:
-            for i, addr1 in enumerate(addresses):
-                hostname1 = addr1.get('hostname')
-                if not hostname1 or hostname1.lower().strip() in processed_hostnames:
+            # Grouper les adresses par hostname
+            for addr in addresses:
+                hostname = addr.get('hostname')
+                if not hostname:
                     continue
-                
-                hostname1_clean = hostname1.lower().strip()
-                duplicate_group = [addr1]
-                
-                # Chercher tous les doublons de ce hostname
-                for j, addr2 in enumerate(addresses[i+1:], i+1):
-                    hostname2 = addr2.get('hostname')
-                    if hostname2 and hostname2.lower().strip() == hostname1_clean:
-                        duplicate_group.append(addr2)
-                
-                # Si doublons trouvés, créer toutes les paires
-                if len(duplicate_group) > 1:
-                    processed_hostnames.add(hostname1_clean)
                     
-                    logger.warning(f"Doublon hostname détecté: {hostname1_clean} ({len(duplicate_group)} adresses)")
+                hostname_clean = hostname.lower().strip()
+                if hostname_clean not in hostname_groups:
+                    hostname_groups[hostname_clean] = []
+                hostname_groups[hostname_clean].append(addr)
+            
+            # Identifier les groupes avec doublons
+            for hostname_clean, group in hostname_groups.items():
+                if len(group) > 1:
+                    duplicates[hostname_clean] = group
+                    
+                    logger.warning(f"Doublon hostname détecté: {hostname_clean} ({len(group)} adresses)")
                     
                     # Afficher toutes les adresses dupliquées
-                    for idx, addr in enumerate(duplicate_group):
-                        logger.info(f"  Adresse {idx+1}: {addr.get('ip')} (ID: {addr.get('id')}, editDate: {addr.get('editDate')})")
-                    
-                    # Déterminer laquelle sera supprimée
-                    most_recent = self.determine_most_recent(duplicate_group[0], duplicate_group[1])
-                    logger.warning(f"  → Adresse à supprimer: {most_recent.get('ip')} (la plus récente)")
-                    
-                    # Créer les paires pour le traitement
-                    for k in range(len(duplicate_group)-1):
-                        duplicates.append((duplicate_group[k], duplicate_group[k+1]))
+                    for idx, addr in enumerate(group, 1):
+                        logger.info(f"  Adresse {idx}: {addr.get('ip')} (ID: {addr.get('id')}, editDate: {addr.get('editDate')})")
             
             if duplicates:
-                logger.info(f"Trouvé {len(duplicates)} paires de doublons hostname - traitement en cours...")
+                logger.info(f"Trouvé {len(duplicates)} hostnames dupliqués - traitement en cours...")
             else:
                 logger.info("Aucun doublon hostname détecté")
                 
@@ -435,7 +386,7 @@ class PhpIPAMAPI:
             
         except Exception as e:
             logger.error(f"Erreur find_hostname_duplicates: {e}")
-            return []
+            return {}  # IMPORTANT: Retourner un dict vide, pas une liste
 
     def determine_oldest_to_keep(self, addresses_list):
         """
@@ -454,12 +405,23 @@ class PhpIPAMAPI:
         oldest_addr = addresses_list[0]
         
         for addr in addresses_list[1:]:
-            # Utiliser determine_most_recent existant (renvoie la plus récente)
-            most_recent = self.determine_most_recent(oldest_addr, addr)
+            # Logique directe : comparer editDate puis ID
+            edit_date1 = oldest_addr.get('editDate')
+            edit_date2 = addr.get('editDate')
             
-            # Si addr est moins récente qu'oldest_addr, la garder
-            if most_recent == oldest_addr:
-                oldest_addr = addr
+            # Si les deux ont editDate, comparer
+            if edit_date1 and edit_date2 and edit_date1 != 'None' and edit_date2 != 'None':
+                if edit_date2 < edit_date1:  # addr est plus ancien
+                    oldest_addr = addr
+            else:
+                # Fallback sur ID (plus petit = plus ancien)
+                try:
+                    id1 = int(oldest_addr.get('id', 999999))
+                    id2 = int(addr.get('id', 999999))
+                    if id2 < id1:  # addr est plus ancien
+                        oldest_addr = addr
+                except:
+                    pass
         
         return oldest_addr
 
