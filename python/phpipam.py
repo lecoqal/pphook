@@ -636,6 +636,137 @@ class PhpIPAMAPI:
             return last_change.get('date', 'Date inconnue'), last_change.get('action', 'Action inconnue')
         except Exception:
             return "Date inconnue", "Action inconnue"
+        
+    def clean_duplicates(self, duplicate_type, addresses, phpipam, powerdns=None, zones=None):
+        """
+        Fonction commune pour nettoyer les doublons MAC et hostname
+        
+        Args:
+            duplicate_type (str): 'mac' ou 'hostname'
+            addresses (list): Liste des adresses
+            phpipam: Instance API phpIPAM
+            powerdns: Instance API PowerDNS (requis pour hostname)
+            zones: Liste des zones DNS (requis pour hostname)
+            
+        Returns:
+            tuple: (cleaned_count, processed_items, updated_addresses)
+                - cleaned_count: Nombre d'éléments nettoyés
+                - processed_items: Liste des items traités pour notification
+                - updated_addresses: Liste des adresses mise à jour
+        """
+        logger.info(f"=== Début nettoyage doublons {duplicate_type.upper()} ===")
+        
+        cleaned_count = 0
+        processed_items = []
+        updated_addresses = addresses.copy()
+        
+        try:
+            # 1. Trouver les doublons
+            if duplicate_type == 'mac':
+                duplicates = self.find_mac_duplicates(addresses)
+                logger.info(f"Trouvé {len(duplicates)} paires de doublons MAC")
+                
+                # 2. Pour chaque paire de doublons MAC
+                for addr1, addr2 in duplicates:
+                    try:
+                        # Déterminer l'adresse à garder (la plus ancienne)
+                        address_to_keep = self.determine_oldest_to_keep([addr1, addr2])
+                        address_to_remove = addr1 if address_to_keep == addr2 else addr2
+                        
+                        logger.info(f"Doublon MAC: suppression {address_to_remove.get('ip')} ({address_to_remove.get('hostname')}), conservation {address_to_keep.get('ip')}")
+                        
+                        # 3. Exécuter l'action
+                        if self.remove_mac_from_address(address_to_remove.get('id')):
+                            cleaned_count += 1
+                            
+                            # Préparer les infos pour notification
+                            processed_items.append({
+                                'address': address_to_remove,
+                                'action': 'mac_removed',
+                                'duplicate_info': {
+                                    'mac': address_to_remove.get('mac'),
+                                    'kept_address': address_to_keep
+                                }
+                            })
+                            
+                            logger.info(f"MAC supprimée avec succès pour {address_to_remove.get('ip')}")
+                        else:
+                            logger.error(f"Échec suppression MAC pour {address_to_remove.get('ip')}")
+                            
+                    except Exception as e:
+                        logger.error(f"Erreur lors du traitement doublon MAC: {e}")
+                        
+            elif duplicate_type == 'hostname':
+                duplicates = self.find_hostname_duplicates(addresses)
+                logger.info(f"Trouvé {len(duplicates)} hostnames dupliqués")
+                
+                # 2. Pour chaque groupe de doublons hostname
+                for hostname, duplicate_addresses in duplicates.items():
+                    try:
+                        # Déterminer l'adresse à garder (la plus ancienne)
+                        address_to_keep = self.determine_oldest_to_keep(duplicate_addresses)
+                        
+                        # Créer la liste des adresses à supprimer
+                        addresses_to_delete = duplicate_addresses.copy()
+                        addresses_to_delete.remove(address_to_keep)
+                        
+                        # Logs groupés
+                        ips_to_delete = [addr.get('ip') for addr in addresses_to_delete]
+                        logger.info(f"Doublon hostname: {hostname}")
+                        logger.info(f"→ Suppression adresses: {', '.join(ips_to_delete)}")
+                        logger.info(f"→ Conservation adresse: {address_to_keep.get('ip')} (la plus ancienne)")
+                        
+                        # 3. Exécuter l'action pour chaque adresse dupliquée
+                        for addr in addresses_to_delete:
+                            ip = addr.get('ip')
+                            
+                            try:
+                                # Nettoyage DNS spécifique aux hostname
+                                if powerdns and zones:
+                                    # Supprimer les enregistrements DNS associés
+                                    zone = powerdns.find_zone_for_hostname(hostname, zones)
+                                    if zone:
+                                        powerdns.delete_record(zone, hostname, "A")
+                                    
+                                    reverse_zone = powerdns.get_reverse_zone_from_ip(ip)
+                                    ptr_name = powerdns.get_ptr_name_from_ip(ip)
+                                    if reverse_zone and ptr_name:
+                                        reverse_zone_clean = reverse_zone.rstrip('.')
+                                        if reverse_zone_clean in zones:
+                                            powerdns.delete_record(reverse_zone, ptr_name, "PTR")
+                                
+                                # Supprimer l'adresse
+                                if self.delete_address(ip, updated_addresses):
+                                    cleaned_count += 1
+                                    # Retirer l'adresse de la liste pour éviter de la traiter plus tard
+                                    updated_addresses = [a for a in updated_addresses if a.get('ip') != ip]
+                                    
+                                    # Préparer les infos pour notification
+                                    processed_items.append({
+                                        'address': addr,
+                                        'action': 'address_deleted',
+                                        'duplicate_info': {
+                                            'hostname': hostname,
+                                            'kept_address': address_to_keep
+                                        }
+                                    })
+                                    
+                                    logger.info(f"Adresse {ip} supprimée avec succès")
+                                else:
+                                    logger.error(f"Échec suppression adresse {ip}")
+                                    
+                            except Exception as e:
+                                logger.error(f"Erreur suppression adresse {ip}: {e}")
+                                
+                    except Exception as e:
+                        logger.error(f"Erreur lors du traitement doublon hostname {hostname}: {e}")
+            
+            logger.info(f"Nettoyage {duplicate_type.upper()} terminé: {cleaned_count} éléments traités")
+            return cleaned_count, processed_items, updated_addresses
+            
+        except Exception as e:
+            logger.error(f"Erreur générale lors du nettoyage {duplicate_type}: {e}")
+            return 0, [], addresses
 
     def close(self):
         """Ferme la session HTTP"""
