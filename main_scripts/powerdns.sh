@@ -23,8 +23,8 @@ apt-get install libxml2-dev libxmlsec1-dev libxmlsec1-openssl -y
 # ==========================================
 # DATABASE CONFIG
 # ==========================================
-mysql -u $PDNS_DB_USER -h $DB_IP -p$PDNS_DB_PASS $PDNS_DB_NAME < /usr/share/pdns-backend-mysql/schema/schema.mysql.sql
-mysql -u $PDNS_DB_USER -h $DB_IP -p$PDNS_DB_PASS $PDNS_DB_NAME -e "ALTER TABLE records ADD COLUMN change_date INT DEFAULT NULL;"
+mysql -u "$PDNS_DB_USER" -h "$DB_IP" -p"$PDNS_DB_PASS" "$PDNS_DB_NAME" < /usr/share/pdns-backend-mysql/schema/schema.mysql.sql
+mysql -u "$PDNS_DB_USER" -h "$DB_IP" -p"$PDNS_DB_PASS" "$PDNS_DB_NAME" -e "ALTER TABLE records ADD COLUMN change_date INT DEFAULT NULL;"
 
 # ==========================================
 # TSIG KEY GENERATION
@@ -478,7 +478,6 @@ else
     echo "Check configuration in /etc/powerdns/pdns.conf"
 fi
 
-# ==========================================
 # IMPORTANT INFORMATION REMINDER
 # ==========================================
 echo -e "\n=== IMPORTANT INFORMATION ==="
