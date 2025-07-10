@@ -47,6 +47,7 @@ smtp_port = $SMTP_PORT
 from = $EMAIL_FROM
 to = $EMAIL_TO
 use_tls = $SMTP_USE_TLS
+generic_email = $GENERIC_EMAIL
 
 [validation]
 hostname_pattern = $HOSTNAME_PATTERN

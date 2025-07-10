@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  pphook:
+    build: .
+    image: pphook:1.0
+    container_name: pphook-service
+    restart: unless-stopped
+    
+    # Variables d'environnement (non sensibles)
+    environment:
+      - TZ=Europe/Paris
+      - PYTHONUNBUFFERED=1
+    
+    # Secrets Docker
+    secrets:
+      - phpipam_url
+      - phpipam_app_id
+      - phpipam_username
+      - phpipam_password
+      - powerdns_url
+      - powerdns_api_key
+      - smtp_server
+      - smtp_port
+      - email_from
+      - email_to
+      - generic_email
+      - hostname_pattern
+      - max_hostname_length
+      - check_interval
+    
+    # Volumes pour persistance
+    volumes:
+      - pphook_data:/var/lib/pphook
+      - pphook_logs:/var/log
+    
+    # Configuration réseau
+    networks:
+      - pphook_network
+    
+    # Limites de ressources
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+# Définition des secrets Docker Swarm
+secrets:
+  phpipam_url:
+    external: true
+  phpipam_app_id:
+    external: true
+  phpipam_username:
+    external: true
+  phpipam_password:
+    external: true
+  powerdns_url:
+    external: true
+  powerdns_api_key:
+    external: true
+  smtp_server:
+    external: true
+  smtp_port:
+    external: true
+  email_from:
+    external: true
+  email_to:
+    external: true
+  generic_email:
+    external: true
+  hostname_pattern:
+    external: true
+  max_hostname_length:
+    external: true
+  check_interval:
+    external: true
+
+# Volumes persistants
+volumes:
+  pphook_data:
+    driver: local
+  pphook_logs:
+    driver: local
+
+# Réseau dédié
+networks:
+  pphook_network:
+    driver: overlay
+    attachable: true
