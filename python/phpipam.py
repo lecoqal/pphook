@@ -463,6 +463,45 @@ class PhpIPAMAPI:
             logger.error(f"Erreur remove_mac_from_address {address_id}: {e}")
             return False
     
+    def find_mac_duplicates(self, addresses):
+        """
+        Trouve tous les doublons MAC dans une liste d'adresses
+        
+        API: Aucun (traitement local)
+        Params: addresses (list[dict]) - Liste des adresses à analyser
+        Returns: list[tuple] - Liste des paires (addr1, addr2) ayant la même MAC
+        """
+        duplicates = []
+        processed_macs = set()
+        
+        try:
+            for i, addr1 in enumerate(addresses):
+                has_mac1, mac1, _ = self.has_mac_and_dhcp_profil(addr1)
+                if not has_mac1 or mac1 in processed_macs:
+                    continue
+                
+                duplicate_group = [addr1]
+                
+                # Chercher tous les doublons de cette MAC
+                for j, addr2 in enumerate(addresses[i+1:], i+1):
+                    has_mac2, mac2, _ = self.has_mac_and_dhcp_profil(addr2)
+                    if has_mac2 and mac1 == mac2:
+                        duplicate_group.append(addr2)
+                
+                # Si doublons trouvés, créer toutes les paires
+                if len(duplicate_group) > 1:
+                    processed_macs.add(mac1)
+                    for k in range(len(duplicate_group)-1):
+                        duplicates.append((duplicate_group[k], duplicate_group[k+1]))
+                    logger.warning(f"Doublon MAC détecté: {mac1} ({len(duplicate_group)} adresses)")
+            
+            logger.info(f"Trouvé {len(duplicates)} paires de doublons MAC")
+            return duplicates
+            
+        except Exception as e:
+            logger.error(f"Erreur find_mac_duplicates: {e}")
+            return []
+    
     def force_editdate_update(self, address_id):
         """
         Force la mise à jour de l'editDate avec vérification finale
