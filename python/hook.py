@@ -538,7 +538,7 @@ def main():
     # =========================================================================
     logger.info("=== Phase 2: Résolution doublons MAC ===")
     
-    mac_cleaned, mac_processed_items, addresses = clean_duplicates('mac', addresses, phpipam)
+    mac_cleaned, mac_processed_items, addresses = phpipam.clean_duplicates('mac', addresses, phpipam)
     
     # Notifications pour doublons MAC
     for item in mac_processed_items:
@@ -554,35 +554,16 @@ def main():
                 # Utiliser notify_error avec duplicate_mac pour déclencher le bon template
                 duplicate_mac = duplicate_info['mac']
                 edit_date, action = phpipam.get_changelog_summary(changelog, use_generic_email)
+                msg = f"MAC dupliquée détectée et corrigée: {duplicate_mac}"
                 
-                success = notify_error(
-                    address=address,
-                    hostname=address.get('hostname', 'Non défini'),
-                    ip=address.get('ip'),
-                    error_message=f"MAC dupliquée détectée et corrigée: {duplicate_mac}",
-                    username=username,
-                    edit_date=edit_date,
-                    action=action,
-                    duplicate_mac=duplicate_mac,
-                    user_email=user_email,
-                    use_generic_email=use_generic_email
-                )
+                success = notify_error(address, address.get('hostname', 'Non défini'), address.get('ip'), msg, username,
+                                       edit_date, action, duplicate_mac, user_email, use_generic_email)
                 
                 if not success and GENERIC_EMAIL:
                     # Retry avec email générique si échec
                     logger.warning(f"Échec notification utilisateur pour MAC {duplicate_mac}, retry avec email générique")
-                    notify_error(
-                        address=address,
-                        hostname=address.get('hostname', 'Non défini'),
-                        ip=address.get('ip'),
-                        error_message=f"MAC dupliquée détectée et corrigée: {duplicate_mac}",
-                        username="Email générique (retry)",
-                        edit_date="Non disponible",
-                        action="Non disponible",
-                        duplicate_mac=duplicate_mac,
-                        user_email=GENERIC_EMAIL,
-                        use_generic_email=True
-                    )
+                    notify_error(address, address.get('hostname', 'Non défini'), address.get('ip'), msg, "Email générique (retry)",
+                                 "Non disponible", "Non disponible", duplicate_mac, GENERIC_EMAIL, use_generic_email=True)
                 else:
                     logger.info(f"Notification MAC dupliquée envoyée à {user_email}")
             else:
@@ -614,35 +595,16 @@ def main():
                 hostname = duplicate_info['hostname']
                 kept_address = duplicate_info['kept_address']
                 edit_date, action = phpipam.get_changelog_summary(changelog, use_generic_email)
-                
-                success = notify_error(
-                    address=address,
-                    hostname=hostname,
-                    ip=address.get('ip'),
-                    error_message=f"Hostname dupliqué détecté et supprimé. Adresse conservée: {kept_address.get('ip')}",
-                    username=username,
-                    edit_date=edit_date,
-                    action=action,
-                    duplicate_address=kept_address,
-                    user_email=user_email,
-                    use_generic_email=use_generic_email
-                )
+                msg = f"Hostname dupliqué détecté et supprimé. Adresse conservée: {kept_address.get('ip')}"
+
+                success = notify_error(address, address.get('hostname', 'Non défini'), address.get('ip'),
+                                       msg, username, edit_date, action, kept_address, user_email, use_generic_email)
                 
                 if not success and GENERIC_EMAIL:
                     # Retry avec email générique si échec
                     logger.warning(f"Échec notification utilisateur pour hostname {hostname}, retry avec email générique")
-                    notify_error(
-                        address=address,
-                        hostname=hostname,
-                        ip=address.get('ip'),
-                        error_message=f"Hostname dupliqué détecté et supprimé. Adresse conservée: {kept_address.get('ip')}",
-                        username="Email générique (retry)",
-                        edit_date="Non disponible",
-                        action="Non disponible",
-                        duplicate_address=kept_address,
-                        user_email=GENERIC_EMAIL,
-                        use_generic_email=True
-                    )
+                    notify_error(address, address.get('hostname', 'Non défini'), address.get('ip'), msg,
+                                 "Email générique (retry)", "Non disponible", "Non disponible", kept_address, GENERIC_EMAIL, use_generic_email=True)
                 else:
                     logger.info(f"Notification hostname dupliqué envoyée à {user_email}")
             else:
