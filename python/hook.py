@@ -161,18 +161,6 @@ def validate_ip_address(ip):
     except ValueError:
         return False, "Adresse IP invalide"
 
-def validate_subnet_ip(ip, subnet):
-    """Vérifie si l'IP appartient au sous-réseau"""
-    try:
-        ip_obj = ipaddress.ip_address(ip)
-        subnet_obj = ipaddress.ip_network(subnet)
-        if ip_obj in subnet_obj:
-            return True, "L'adresse IP appartient au sous-réseau"
-        else:
-            return False, f"L'adresse IP n'appartient pas au sous-réseau {subnet}"
-    except ValueError as e:
-        return False, str(e)
-
 # =================================================
 #  +-----------------------------------------+
 #  |           FONCTIONS EMAIL               |
@@ -291,7 +279,6 @@ def process_address(phpipam, powerdns, address, users, zones):
     except Exception as e:
         logger.debug(f"Impossible de récupérer changelog pour {address_id}: {e}")
     
-    # MODIFICATION: Utilisation des nouvelles méthodes dans phpipam
     user_email, username, use_generic_email = phpipam.get_user_email_from_changelog(changelog, users, GENERIC_EMAIL)
     if not user_email:
         logger.error(f"Email non disponible pour {address_id}")
@@ -326,6 +313,12 @@ def process_address(phpipam, powerdns, address, users, zones):
         notify_error(address, hostname, ip, error_message, username, edit_date, action, 
                     user_email=user_email, use_generic_email=use_generic_email)
         
+        # AJOUTER ICI : Supprimer l'entrée IPAM pour données invalides
+        if phpipam.delete_address(ip):
+            logger.info(f"Entrée IPAM supprimée pour données invalides: {ip}")
+        else:
+            logger.error(f"Échec suppression entrée IPAM: {ip}")
+        
         # === FORCER EDITDATE ===
         force_editdate_if_needed("données invalides")
         return False
@@ -335,7 +328,7 @@ def process_address(phpipam, powerdns, address, users, zones):
     if not is_valid:
         logger.warning(f"Hostname invalide: {hostname} - {error}")
         
-        cleanup_success = powerdns.cleanup_invalid_hostname_records(hostname, ip, zones)
+        cleanup_success = powerdns.cleanup_dns_for_address(hostname, ip, zones)
         
         notify_error(address, hostname, ip, f"Hostname invalide: {error}", 
                     username, edit_date, action, user_email=user_email, use_generic_email=use_generic_email)
@@ -502,7 +495,7 @@ def reset_last_check():
 # =================================================
 
 def main():
-    """Fonction principale avec notifications pour doublons"""
+    """Fonction principale"""
     logger.info("Démarrage du script d'intégration phpIPAM-PowerDNS")
     
     success_count = 0
@@ -522,13 +515,14 @@ def main():
     # PHASE 1: RÉCUPÉRATION DES DONNÉES
     # =========================================================================
     logger.info("Récupération des données...")
-    addresses = phpipam.get_addresses(since=last_check)
+    recent_addresses = phpipam.get_addresses(since=last_check)
+    all_addresses = phpipam.get_addresses(since=None)  # Toutes les adresses
     users = phpipam.get_all_users()
     zones = powerdns.get_zones(clean=True, use_cache=True)
+
+    logger.info(f"Données récupérées: {len(recent_addresses)} récentes, {len(all_addresses)} totales, {len(users)} utilisateurs, {len(zones)} zones DNS")
     
-    logger.info(f"Données récupérées: {len(addresses)} adresses, {len(users)} utilisateurs, {len(zones)} zones DNS")
-    
-    if not addresses:
+    if not recent_addresses:
         logger.info("Aucune adresse à traiter")
         save_last_check_time(datetime.now())
         return 0
@@ -538,7 +532,7 @@ def main():
     # =========================================================================
     logger.info("=== Phase 2: Résolution doublons MAC ===")
     
-    mac_cleaned, mac_processed_items, addresses = phpipam.clean_duplicates('mac', addresses, phpipam)
+    mac_cleaned, mac_processed_items, updated_addresses = phpipam.clean_mac_duplicates(all_addresses)
     
     # Notifications pour doublons MAC
     for item in mac_processed_items:
@@ -547,7 +541,7 @@ def main():
         
         try:
             # Récupération changelog et email utilisateur
-            changelog = phpipam.get_address_changelog(address.get('id'))
+            changelog = item.get('changelog', [])
             user_email, username, use_generic_email = phpipam.get_user_email_from_changelog(changelog, users, GENERIC_EMAIL)
             
             if user_email:
@@ -556,14 +550,16 @@ def main():
                 edit_date, action = phpipam.get_changelog_summary(changelog, use_generic_email)
                 msg = f"MAC dupliquée détectée et corrigée: {duplicate_mac}"
                 
-                success = notify_error(address, address.get('hostname', 'Non défini'), address.get('ip'), msg, username,
-                                       edit_date, action, duplicate_mac, user_email, use_generic_email)
+                success = notify_error(address=address, hostname=address.get('hostname', 'Non défini'), ip=address.get('ip'), error_message=msg,
+                                       username=username, edit_date=edit_date, action=action, duplicate_address=None, duplicate_mac=duplicate_mac,
+                                       user_email=user_email, use_generic_email=use_generic_email)
                 
                 if not success and GENERIC_EMAIL:
                     # Retry avec email générique si échec
                     logger.warning(f"Échec notification utilisateur pour MAC {duplicate_mac}, retry avec email générique")
-                    notify_error(address, address.get('hostname', 'Non défini'), address.get('ip'), msg, "Email générique (retry)",
-                                 "Non disponible", "Non disponible", duplicate_mac, GENERIC_EMAIL, use_generic_email=True)
+                    notify_error(address=address, hostname=address.get('hostname', 'Non défini'), ip=address.get('ip'), error_message=msg,
+                                 username="Email générique (retry)", edit_date="Non disponible", action="Non disponible", duplicate_address=None,
+                                 duplicate_mac=duplicate_mac, user_email=GENERIC_EMAIL, use_generic_email=True)
                 else:
                     logger.info(f"Notification MAC dupliquée envoyée à {user_email}")
             else:
@@ -579,7 +575,7 @@ def main():
     # =========================================================================
     logger.info("=== Phase 3: Résolution doublons hostname ===")
     
-    hostname_cleaned, hostname_processed_items, addresses = phpipam.clean_duplicates('hostname', addresses, phpipam, powerdns, zones)
+    hostname_cleaned, hostname_processed_items, updated_addresses = phpipam.clean_hostname_duplicates(all_addresses, powerdns, zones)
     
     # Notifications pour doublons hostname
     for item in hostname_processed_items:
@@ -588,7 +584,7 @@ def main():
         
         try:
             # Récupération changelog et email utilisateur
-            changelog = phpipam.get_address_changelog(address.get('id'))
+            changelog = item.get('changelog', [])
             user_email, username, use_generic_email = phpipam.get_user_email_from_changelog(changelog, users, GENERIC_EMAIL)
             
             if user_email:
@@ -597,14 +593,15 @@ def main():
                 edit_date, action = phpipam.get_changelog_summary(changelog, use_generic_email)
                 msg = f"Hostname dupliqué détecté et supprimé. Adresse conservée: {kept_address.get('ip')}"
 
-                success = notify_error(address, address.get('hostname', 'Non défini'), address.get('ip'),
-                                       msg, username, edit_date, action, kept_address, user_email, use_generic_email)
+                success = notify_error(address=address, hostname=hostname, ip=address.get('ip'), error_message=msg, username=username, edit_date=edit_date,
+                                       action=action, duplicate_address=kept_address, duplicate_mac=None, user_email=user_email, use_generic_email=use_generic_email)
                 
                 if not success and GENERIC_EMAIL:
                     # Retry avec email générique si échec
                     logger.warning(f"Échec notification utilisateur pour hostname {hostname}, retry avec email générique")
-                    notify_error(address, address.get('hostname', 'Non défini'), address.get('ip'), msg,
-                                 "Email générique (retry)", "Non disponible", "Non disponible", kept_address, GENERIC_EMAIL, use_generic_email=True)
+                    notify_error(address=address, hostname=hostname, ip=address.get('ip'), error_message=msg, username="Email générique (retry)",
+                                 edit_date="Non disponible", action="Non disponible", duplicate_address=kept_address, duplicate_mac=None,
+                                 user_email=GENERIC_EMAIL, use_generic_email=True)
                 else:
                     logger.info(f"Notification hostname dupliqué envoyée à {user_email}")
             else:
@@ -619,8 +616,8 @@ def main():
     # PHASE 4: TRAITEMENT INDIVIDUEL
     # =========================================================================
     logger.info("=== Phase 4: Traitement individuel ===")
-    
-    for address in addresses:
+
+    for address in updated_addresses:
         try: 
             success = process_address(phpipam, powerdns, address, users, zones)
             
@@ -682,4 +679,3 @@ if __name__ == "__main__":
         run_script()
     else:
         sys.exit(main())
-

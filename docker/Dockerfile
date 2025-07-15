@@ -36,6 +36,7 @@ RUN mkdir -p /opt/pphook/templates/email \
 WORKDIR /opt/pphook
 
 # Copie des fichiers Python principaux depuis l'arborescence parent
+COPY ../python/hook.py .
 COPY ../python/pdns.py .
 COPY ../python/phpipam.py .
 
@@ -48,9 +49,6 @@ COPY ../python/templates/email/*.j2 ./templates/email/
 # Copie du script de reset timestamp (interne au conteneur)
 COPY ../bash/reset_timestamp.sh .
 RUN chmod +x reset_timestamp.sh
-
-# Copie de la version dockerisée de hook.py
-COPY hook_docker.py hook.py
 
 # Configuration des permissions
 RUN chmod +x hook.py pdns.py phpipam.py config_loader.py

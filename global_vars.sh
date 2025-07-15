@@ -4,16 +4,11 @@
 #    VARIABLES GLOBALES      #
 ##############################
 
-# Réseau
-DOMAIN=""
-
 # Base de données
-DB_HOST=""
 DB_IP=""
 DB_PORT="3306"
 
 # PowerDNS
-PDNS_HOST=""
 PDNS_IP=""
 PDNS_PORT="8081"
 PDNS_API_KEY=""
@@ -23,15 +18,7 @@ PDNS_DB_PASS=""
 PDNS_VERSION="4.7.0"
 PDNS_API_URL="http://$PDNS_IP:$PDNS_PORT/api/v1"
 
-# PowerDNS Admin
-PDNSADMIN_DB_NAME=""
-PDNSADMIN_DB_USER=""
-PDNSADMIN_DB_PASS=""
-PDNSADMIN_SECRET_KEY=""
-PDNSADMIN_API_KEY=""
-
 # phpIPAM
-IPAM_HOST=""
 IPAM_IP=""
 IPAM_API_URL="http://${IPAM_IP}/api"
 IPAM_APP_ID=""
@@ -74,6 +61,3 @@ HOOK_IP=$ANSIBLE_IP
 
 # Divers
 PROJECT_PATH=""
-DEFAULT_DOMAIN=""
-TIMEZONE="Europe/Paris"
-LOG_LEVEL="INFO"
