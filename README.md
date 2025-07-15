@@ -16,8 +16,6 @@
 - [Usage](#usage)
 - [API Documentation](#api-documentation)
 - [Monitoring](#monitoring)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
 - [Changelog](#changelog)
 - [Support](#support)
 - [License](#license)
@@ -56,29 +54,16 @@ PPHOOK implements a real-time synchronization engine that automatically maintain
 - **Service Integration**: Generates DHCP reservations and DNS zone configurations
 
 ### Supported Systems
-- **phpIPAM**: Version 1.5+ with API access
-- **PowerDNS**: Version 4.4+ with API enabled
+- **phpIPAM**: Version 1.7+ with API access
+- **PowerDNS**: Version 4.7+ with API enabled
 - **BIND9**: Slave DNS servers with zone transfer support
 - **ISC DHCP**: DHCP server with reservation management
 - **MariaDB/MySQL**: Database backend for all components
 
 ## Architecture
 
-### High-Level Architecture
+[SCHEME]
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│     phpIPAM     │    │     PPHOOK      │    │    PowerDNS     │
-│   (IPAM Web)    │◄──►│   Middleware    │◄──►│  (DNS Master)   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│    MariaDB      │    │  Email System   │    │   BIND9 Slaves  │
-│   (Database)    │    │ (Notifications) │    │  (NS01/NS02)    │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-```
 
 ### Component Overview
 
@@ -167,37 +152,7 @@ For detailed installation instructions, component-specific configurations, and t
 
 ### Global Variables
 
-The main configuration is managed through `global_vars.sh`. Key variables include:
-
-```bash
-# Network Configuration
-DOMAIN="your-domain.local"
-DEFAULT_DOMAIN="your-domain.local"
-
-# Component IP Addresses
-DB_IP="192.168.1.100"
-PDNS_IP="192.168.1.101"
-IPAM_IP="192.168.1.102"
-NS01_IP="192.168.1.103"
-NS02_IP="192.168.1.104"
-DHCP_IP="192.168.1.105"
-
-# API Configuration
-PDNS_API_KEY="your-secure-api-key"
-IPAM_APP_ID="pphook"
-IPAM_USERNAME="api_user"
-IPAM_PASSWORD="secure_password"
-
-# Email Configuration
-SMTP_SERVER="mail.your-domain.local"
-EMAIL_FROM="pphook@your-domain.local"
-EMAIL_TO="admin@your-domain.local"
-
-# Validation Rules
-HOSTNAME_PATTERN="^[a-zA-Z0-9][-a-zA-Z0-9.]*[a-zA-Z0-9]$"
-MAX_HOSTNAME_LENGTH="63"
-CHECK_INTERVAL="60"
-```
+The main configuration is managed through `global_vars.sh`.
 
 ### Security Configuration
 
@@ -323,114 +278,10 @@ Automated zone transfer monitoring via cron:
 */5 * * * * /opt/pphook/bash/monitor_axfr.sh
 ```
 
-## Troubleshooting
-
-### Common Issues
-
-#### DNS Synchronization Failures
-```bash
-# Check PowerDNS API
-curl -H "X-API-Key: $PDNS_API_KEY" http://localhost:8081/api/v1/servers
-
-# Verify zone configuration
-pdnsutil list-all-zones
-pdnsutil check-zone domain.local
-```
-
-#### Database Connection Issues
-```bash
-# Test database connectivity
-mysql -u pdns_user -p -h db_server -e "SHOW DATABASES;"
-
-# Check firewall rules
-ufw status | grep 3306
-iptables -L | grep 3306
-```
-
-#### Email Notification Problems
-```bash
-# Test SMTP connectivity
-telnet smtp.server.local 25
-
-# Check email configuration
-grep -A 10 "\[email\]" /opt/pphook/config.ini
-```
-
-### Debug Mode
-
-Enable detailed logging for troubleshooting:
-
-```python
-# Edit /opt/pphook/hook.py
-logging.getLogger("pphook").setLevel(logging.DEBUG)
-```
-
-### Service Dependencies
-
-Verify service startup order and dependencies:
-
-```bash
-systemctl list-dependencies pphook
-systemctl list-dependencies pdns
-```
-
-## Contributing
-
-### Development Setup
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/new-feature`)
-3. Make your changes
-4. Add tests for new functionality
-5. Submit a pull request
-
-### Coding Standards
-
-- Follow PEP 8 for Python code
-- Use meaningful variable and function names
-- Add docstrings for all functions and classes
-- Include error handling and logging
-- Write unit tests for new features
-
-### Testing
-
-```bash
-# Run unit tests
-python3 -m pytest tests/
-
-# Run integration tests
-python3 -m pytest tests/integration/
-
-# Code quality checks
-flake8 python/
-pylint python/
-```
-
 ## Changelog
-
-### Version 2.0 (Current)
-- Complete rewrite of synchronization engine
-- Added MAC address duplicate detection
-- Improved error handling and recovery
-- Enhanced email notification system
-- Added DHCP reservation management
-- Implemented GPG configuration encryption
-
-### Version 1.2
-- Added hostname duplicate detection
-- Improved DNS consistency checks
-- Enhanced logging and monitoring
-- Bug fixes for zone transfer issues
-
-### Version 1.1
-- Initial phpIPAM integration
-- Basic PowerDNS synchronization
-- Email notification system
-- Service management scripts
 
 ### Version 1.0
 - Initial release
-- Core DNS synchronization functionality
 
 ## Support
 
@@ -442,7 +293,6 @@ pylint python/
 ### Getting Help
 - **Issues**: Use GitHub Issues for bug reports and feature requests
 - **Discussions**: Use GitHub Discussions for questions and community support
-- **Email**: Contact the development team at hook@bretagne.bzh
 
 ### Reporting Bugs
 
@@ -480,5 +330,4 @@ Under the conditions:
 ---
 
 **Project Repository**: [https://github.com/lecoqal/projet](https://github.com/lecoqal/projet)  
-**Documentation**: [Technical Architecture Document](doc/DAT.md)  
-**Support**: hook@bretagne.bzh
+**Documentation**: [Technical Architecture Document](doc/DAT.md)
