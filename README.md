@@ -56,48 +56,21 @@ PPHOOK implements a real-time synchronization engine that automatically maintain
 - **Configuration Management**: Centralized configuration with encrypted storage
 - **Service Integration**: Generates DHCP reservations and DNS zone configurations
 
-### Supported Systems
-- **phpIPAM**: Version 1.7+ with API access
-- **PowerDNS**: Version 4.7+ with API enabled
-- **BIND9**: Slave DNS servers with zone transfer support
-- **ISC DHCP**: DHCP server with reservation management
-- **MariaDB/MySQL**: Database backend for all components
-
 ## Architecture
 
 [SCHEME]
 
-
-### Component Overview
-
-- **PPHOOK Engine**: Python-based synchronization service
-- **phpIPAM Integration**: REST API client for IPAM operations
-- **PowerDNS Integration**: REST API client for DNS management
-- **Email Notification System**: SMTP-based alerting with template support
-- **Configuration Management**: GPG-encrypted configuration storage
+## Prerequisites
 
 ## Prerequisites
 
-### System Requirements
-- **Operating System**: Debian 11+ or Ubuntu 20.04+
-- **Memory**: Minimum 4GB RAM, Recommended 8GB
-- **Storage**: 20GB free space for all components
-- **Network**: All components must have network connectivity
-- **Privileges**: Root/sudo access required for installation
+- **OS**: Debian 11+ ou Ubuntu 20.04+
+- **RAM**: 4GB minimum
+- **Python**: 3.8+
+- **Base de données**: MariaDB/MySQL 5.7+
+- **Accès**: Root/sudo requis
 
-### Software Dependencies
-- Python 3.8 or higher
-- MariaDB/MySQL 5.7+
-- Apache/Nginx web server
-- GPG for configuration encryption
-- SMTP server for email notifications
-
-### Network Requirements
-- Port 53 (DNS) between all DNS servers
-- Port 3306 (MySQL) between database clients and server
-- Port 80/443 (HTTP/HTTPS) for web interfaces
-- Port 8081 (PowerDNS API) for API communication
-- Port 25/587 (SMTP) for email notifications
+Pour les détails complets, voir le [DAT](doc/DAT.md).
 
 ## Installation
 
@@ -121,13 +94,8 @@ PPHOOK implements a real-time synchronization engine that automatically maintain
    ```bash
    cd main_scripts/
    
-   # Install components in order
-   source mariadb.sh      # Database server
-   source powerdns.sh     # DNS master server
-   source ns.sh           # DNS slave servers
-   source phpipam.sh      # IPAM web interface
-   source dhcp.sh         # DHCP server
-   source hook.sh         # PPHOOK service
+   # Install PPHOOK
+   source hook.sh
    ```
 
 4. **Verify installation**
@@ -135,22 +103,7 @@ PPHOOK implements a real-time synchronization engine that automatically maintain
    systemctl status pphook
    tail -f /var/log/pphook.log
    ```
-
-### Detailed Installation
-
-For detailed installation instructions, component-specific configurations, and troubleshooting steps, please refer to the [Technical Architecture Document](doc/DAT.md).
-
-### Installation Script Descriptions
-
-| Script | Purpose | Dependencies |
-|--------|---------|-------------|
-| `mariadb.sh` | Database server setup | None |
-| `powerdns.sh` | DNS master with PowerDNS-Admin | MariaDB |
-| `ns.sh` | BIND9 slave DNS servers | PowerDNS |
-| `phpipam.sh` | IPAM web interface | MariaDB |
-| `dhcp.sh` | ISC DHCP server setup | None |
-| `hook.sh` | PPHOOK middleware service | All above |
-
+   
 ## Configuration
 
 ### Global Variables
@@ -217,30 +170,13 @@ cd ../bash/
 
 ## API Documentation
 
-### phpIPAM API Integration
-
+### Test de connectivité
 ```bash
-# Authentication
-curl -X POST -u username:password \
-  http://ipam.domain.local/api/pphook/user/
+#phpIPAM
+curl http://ipam.domain.local/api/pphook/sections/
 
-# Retrieve addresses
-curl -H "token: AUTH_TOKEN" \
-  http://ipam.domain.local/api/pphook/addresses/
-```
-
-### PowerDNS API Integration
-
-```bash
-# List zones
-curl -H "X-API-Key: API_KEY" \
-  http://dns.domain.local:8081/api/v1/servers/localhost/zones
-
-# Create DNS record
-curl -X PATCH -H "X-API-Key: API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"rrsets":[{"name":"host.domain.local.","type":"A","records":[{"content":"192.168.1.10","disabled":false}]}]}' \
-  http://dns.domain.local:8081/api/v1/servers/localhost/zones/domain.local
+#PowerDNS
+curl -H "X-API-Key: API_KEY" http://dns.domain.local:8081/api/v1/servers
 ```
 
 ## Monitoring
@@ -288,30 +224,14 @@ Automated zone transfer monitoring via cron:
 
 ## Support
 
-### Documentation
-- **Technical Architecture Document**: Complete technical specifications and deployment guide
-- **API Documentation**: Detailed API usage and examples
-- **Installation Guide**: Step-by-step installation procedures
+- **Documentation**: [DAT complet](doc/DAT.md)
+- **Issues**: GitHub Issues pour bugs et demandes
+- **Logs**: `tail -f /var/log/pphook.log`
 
-### Getting Help
-- **Issues**: Use GitHub Issues for bug reports and feature requests
-- **Discussions**: Use GitHub Discussions for questions and community support
-
-### Reporting Bugs
-
-When reporting bugs, please include:
-- PPHOOK version
-- Operating system and version
-- Complete error messages and logs
-- Steps to reproduce the issue
-- Expected vs actual behavior
-
-### Security Issues
-
-Please refer to our [Security Policy](misc/SECURITY.md) for information on:
-- Supported versions
-- How to report security vulnerabilities
-- Security best practices for deployment
+Pour signaler un bug, inclure :
+- Version PPHOOK
+- OS et version
+- Logs d'erreur complets
 
 ## License
 
