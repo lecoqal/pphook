@@ -1,9 +1,12 @@
 # PPHOOK - phpIPAM/PowerDNS Hook - Integration Middleware
 
-**Version:** 2.0  
+![Version](https://img.shields.io/badge/version-2.0-blue)
+![License](https://img.shields.io/badge/license-GPL%20v3.0-green)
+![Status](https://img.shields.io/badge/status-Production%20Ready-brightgreen)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Platform](https://img.shields.io/badge/platform-Linux-orange)
+
 **Author:** Intern n°38  
-**License:** GNU General Public License v3.0  
-**Status:** Production Ready
 
 ## Table of Contents
 
