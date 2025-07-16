@@ -48,6 +48,7 @@ SMTP_PORT="25"
 EMAIL_FROM=""
 EMAIL_TO=""
 SMTP_USE_TLS="False"
+GENERIC_EMAIL=""
 
 # Validation
 HOSTNAME_PATTERN="^[a-zA-Z0-9][-a-zA-Z0-9.]*[a-zA-Z0-9]$"

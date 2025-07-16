@@ -340,7 +340,7 @@ def process_address(phpipam, powerdns, address, users, zones):
             use_generic_email=use_generic_email,
         )
 
-        # AJOUTER ICI : Supprimer l'entrée IPAM pour données invalides
+        # Supprimer l'entrée IPAM pour données invalides
         if phpipam.delete_address(ip):
             logger.info(f"Entrée IPAM supprimée pour données invalides: {ip}")
         else:
@@ -618,7 +618,7 @@ def main():
                     username=username,
                     edit_date=edit_date,
                     action=action,
-                    duplicate_address=None,
+                    duplicate_address=kept_address,
                     duplicate_mac=duplicate_mac,
                     user_email=user_email,
                     use_generic_email=use_generic_email,
@@ -637,7 +637,7 @@ def main():
                         username="Email générique (retry)",
                         edit_date="Non disponible",
                         action="Non disponible",
-                        duplicate_address=None,
+                        duplicate_address=kept_address,
                         duplicate_mac=duplicate_mac,
                         user_email=GENERIC_EMAIL,
                         use_generic_email=True,

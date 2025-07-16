@@ -65,10 +65,18 @@ os.environ["NO_PROXY"] = f"{PDNS_IP},localhost,127.0.0.1"
 
 # 1)
 powerdns = pdns(PDNS_API_URL, PDNS_API_KEY, PDNS_SERVER)
-dns_zones = powerdns.get_existing_zones()
+dns_zones = powerdns.get_zones(clean=False, use_cache=False)  # Récupérer les zones brutes
 
-content = template.render(zones=dns_zones, pdns_ip=PDNS_IP)
+# Extraire les noms des zones depuis les données brutes
+zone_names = []
+for zone in dns_zones:
+    zone_name = zone.get('name', '')
+    if zone_name:
+        zone_names.append(zone_name)
 
+content = template.render(zones=zone_names, pdns_ip=PDNS_IP)
+
+# 2)
 with open(filename, mode="w", encoding="utf-8") as output:
     output.write(content)
     print("wrote", filename)

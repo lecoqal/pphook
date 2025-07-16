@@ -53,14 +53,9 @@ generic_email = $GENERIC_EMAIL
 hostname_pattern = $HOSTNAME_PATTERN
 max_hostname_length = $MAX_HOSTNAME_LENGTH
 
-[default]
-domain = $DEFAULT_DOMAIN
-
 [script]
 check_interval = $CHECK_INTERVAL
 last_check_file = $LAST_CHECK_FILE
-mac_check_interval = $MAC_CHECK_INTERVAL
-last_mac_check_file = $LAST_MAC_CHECK_FILE
 EOF
 
 

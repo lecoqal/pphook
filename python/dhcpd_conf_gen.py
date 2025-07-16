@@ -69,21 +69,32 @@ phpipam.authenticate()
 ########################
 
 # Récupération des IPs pour les réservations d'hôtes
-ip_list = phpipam.get_addresses_with_mac_and_dhcp_profil()
+all_addresses = phpipam.get_addresses(since=None)  # Récupérer toutes les adresses
 
 # Filtrage par profil pour les réservations
 reservations_infra = []
 reservations_lise = []
 
-for ip in ip_list:
-    if ip["dhcp_profil"] == "infra":
-        reservations_infra.append(ip)
-    elif ip["dhcp_profil"] == "lise":
-        reservations_lise.append(ip)
+for address in all_addresses:
+    has_valid, mac, dhcp_profil = phpipam.has_mac_and_dhcp_profil(address)
+    
+    if has_valid:
+        ip_data = {
+            'ip': address.get('ip'),
+            'hostname': address.get('hostname'),
+            'mac': mac,
+            'dhcp_profil': dhcp_profil
+        }
+        
+        if dhcp_profil == "infra":
+            reservations_infra.append(ip_data)
+        elif dhcp_profil == "lise":
+            reservations_lise.append(ip_data)
 
 # Génération du fichier de réservations d'hôtes
 content_resa = template_resa.render(
-    reservations_infra=reservations_infra, reservations_lise=reservations_lise
+    reservations_infra=reservations_infra, 
+    reservations_lise=reservations_lise
 )
 
 os.makedirs("output", exist_ok=True)
