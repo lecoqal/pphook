@@ -36,25 +36,19 @@ RUN mkdir -p /opt/pphook/templates/email \
 WORKDIR /opt/pphook
 
 # Copie des fichiers Python principaux depuis l'arborescence parent
-COPY ../python/hook.py .
-COPY ../python/pdns.py .
-COPY ../python/phpipam.py .
-
-# Copie du config loader Docker
-COPY config_loader.py .
+COPY python/hook.py .
+COPY python/pdns.py .
+COPY python/phpipam.py .
 
 # Copie des templates email
-COPY ../python/templates/email/*.j2 ./templates/email/
+COPY python/templates/email/*.j2 ./templates/email/
 
 # Copie du script de reset timestamp (interne au conteneur)
-COPY ../bash/reset_timestamp.sh .
+COPY bash/reset_timestamp.sh .
 RUN chmod +x reset_timestamp.sh
 
 # Configuration des permissions
-RUN chmod +x hook.py pdns.py phpipam.py config_loader.py
-
-# Création du fichier de configuration (sera rempli au runtime)
-RUN touch config.ini
+RUN chmod +x hook.py pdns.py phpipam.py
 
 # Healthcheck
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \

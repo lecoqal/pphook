@@ -11,7 +11,7 @@ eval "$(gpg --quiet --decrypt ../.env.gpg 2>/dev/null | grep -E '^[A-Z_]+=.*' | 
 # DEPENDENCIES
 # ==========================================
 apt-get update
-apt-get install python3 python3-pip python3-venv sshpass -y
+apt-get install python3 python3-pip python3-venv sshpass logrotate -y
 
 # ==========================================
 # CREATE VENV
@@ -58,6 +58,24 @@ check_interval = $CHECK_INTERVAL
 last_check_file = $LAST_CHECK_FILE
 EOF
 
+# ==========================================
+# SETUP LOG ROTATION
+# ==========================================
+echo "Configuration de la rotation des logs..."
+
+cat > /etc/logrotate.d/pphook << 'EOF'
+/var/log/pphook.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 root root
+    size 100M
+    copytruncate
+}
+EOF
 
 # ==========================================
 # CREATE SERVICE FILE
@@ -99,7 +117,6 @@ cp $PROJECT_PATH/python/templates/email/email*.j2 /opt/pphook/templates/
 
 # Create the directory for the last_check file
 mkdir -p /var/lib/pphook
-
 
 # ==========================================
 # START SERVICE

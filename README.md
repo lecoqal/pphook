@@ -1,6 +1,6 @@
 # PPHOOK - phpIPAM/PowerDNS Hook - Integration Middleware
 
-![Version](https://img.shields.io/badge/version-2.0-blue)
+![Version](https://img.shields.io/badge/version-1.0-blue)
 ![License](https://img.shields.io/badge/license-GPL%20v3.0-green)
 ![Status](https://img.shields.io/badge/status-Production%20Ready-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
@@ -62,13 +62,13 @@ PPHOOK implements a real-time synchronization engine that automatically maintain
 
 ## Prerequisites
 
-- **OS**: Debian 11+ ou Ubuntu 20.04+
+- **OS**: Debian 11+ or Ubuntu 20.04+
 - **RAM**: 4GB minimum
 - **Python**: 3.8+
-- **Base de données**: MariaDB/MySQL 5.7+
-- **Accès**: Root/sudo requis
+- **Database**: MariaDB/MySQL 5.7+
+- **Access**: Root/sudo required
 
-Pour les détails complets, voir le [DAT](doc/DAT.md).
+For complete details, see the [DAT](doc/DAT.md).
 
 ## Installation
 
@@ -100,6 +100,9 @@ Pour les détails complets, voir le [DAT](doc/DAT.md).
    ```bash
    systemctl status pphook
    tail -f /var/log/pphook.log
+   
+   # Verify log rotation setup
+   cat /etc/logrotate.d/pphook
    ```
    
 ## Configuration
@@ -170,7 +173,7 @@ OR use CRON
 
 ## API Documentation
 
-### Test de connectivité
+### Connectivity Test
 ```bash
 #phpIPAM
 curl http://ipam.domain.local/api/pphook/sections/
@@ -208,14 +211,26 @@ grep ERROR /var/log/pphook.log
 grep "Traitement terminé" /var/log/pphook.log
 ```
 
-### AXFR Monitoring
+### Log Rotation
 
-Automated zone transfer monitoring via cron:
+Automatic log rotation is configured during installation:
 
 ```bash
-# Added automatically during installation
-*/5 * * * * /opt/pphook/bash/monitor_axfr.sh
+# Log rotation configuration
+cat /etc/logrotate.d/pphook
+
+# Manual rotation test
+sudo /usr/sbin/logrotate -f /etc/logrotate.d/pphook
+
+# View rotated logs
+ls -la /var/log/pphook*
 ```
+
+### Log retention:
+
+- Daily rotation with 30 days retention
+- Automatic compression (.gz)
+- Force rotation if log > 100MB
 
 ## Changelog
 
@@ -225,13 +240,18 @@ Automated zone transfer monitoring via cron:
 ## Support
 
 - **Documentation**: [DAT complet](doc/DAT.md)
-- **Issues**: GitHub Issues pour bugs et demandes
+- **Issues**: GitHub Issues for bugs and requests
 - **Logs**: `tail -f /var/log/pphook.log`
 
-Pour signaler un bug, inclure :
+To report a bug, include :
 - Version PPHOOK
-- OS et version
-- Logs d'erreur complets
+- OS and version
+- Complete error logs
+
+**Log Management:**
+- Logs automatically rotated daily
+- 30 days retention policy
+- Compressed archives in `/var/log/pphook*.gz`
 
 ## License
 
