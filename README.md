@@ -58,9 +58,7 @@ PPHOOK implements a real-time synchronization engine that automatically maintain
 
 ## Architecture
 
-[SCHEME]
-
-## Prerequisites
+![Architecture Projet](./doc/images/infra_projet.png "Schéma Architecture Projet")
 
 ## Prerequisites
 
@@ -78,8 +76,8 @@ Pour les détails complets, voir le [DAT](doc/DAT.md).
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/lecoqal/projet.git
-   cd projet
+   git clone < lien https git >
+   cd pphook
    ```
 
 2. **Configure global variables**
@@ -166,6 +164,8 @@ python3 bind_local_gen.py
 cd ../bash/
 ./dhcp_conf_push.sh
 ./dns_conf_push.sh
+
+OR use CRON
 ```
 
 ## API Documentation
@@ -252,5 +252,5 @@ Under the conditions:
 
 ---
 
-**Project Repository**: [https://github.com/lecoqal/projet](https://github.com/lecoqal/projet)  
+**Project Repository**: [https://github.com/lecoqal/pphook](https://github.com/lecoqal/pphook)  
 **Documentation**: [Technical Architecture Document](doc/DAT.md)
