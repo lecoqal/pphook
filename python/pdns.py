@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Module PowerDNS API simplifié pour l'intégration phpIPAM-PowerDNS
-Fonctions essentielles uniquement pour performance optimale
+Module PowerDNS API pour l'intégration phpIPAM-PowerDNS
 
 Auteur: Lecoq Alexis
 Date: 06/05/25
@@ -36,7 +35,7 @@ class PowerDNSAPI:
         self._zones_cache_ttl = 3600  # 1 heure
 
     def _create_session(self):
-        """Crée une session HTTP optimisée"""
+        """Crée une session HTTP"""
         session = requests.Session()
 
         retry_strategy = Retry(
@@ -313,7 +312,7 @@ class PowerDNSAPI:
                 octets = str(ip_obj).split(".")
                 return f"{octets[3]}.{octets[2]}.{octets[1]}.{octets[0]}.in-addr.arpa."
             else:
-                # IPv6 - logique simplifiée
+                # IPv6
                 ip_exploded = ip_obj.exploded
                 ip_nibbles = "".join(ip_exploded.replace(":", ""))
                 return ".".join(reversed(ip_nibbles)) + ".ip6.arpa."
@@ -335,7 +334,7 @@ class PowerDNSAPI:
                 octets = str(ip_obj).split(".")
                 return f"{octets[2]}.{octets[1]}.{octets[0]}.in-addr.arpa."
             else:
-                # IPv6 - logique simplifiée pour /64
+                # IPv6
                 ip_exploded = ip_obj.exploded
                 ip_nibbles = "".join(ip_exploded.replace(":", ""))
                 return ".".join(reversed(ip_nibbles[:16])) + ".ip6.arpa."

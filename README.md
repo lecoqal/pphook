@@ -3,8 +3,12 @@
 ![Version](https://img.shields.io/badge/version-1.0-blue)
 ![License](https://img.shields.io/badge/license-GPL%20v3.0-green)
 ![Status](https://img.shields.io/badge/status-Production%20Ready-brightgreen)
+![Security](https://img.shields.io/badge/security-policy-red)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Docker](https://img.shields.io/badge/docker-supported-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-orange)
+![phpIPAM](https://img.shields.io/badge/phpIPAM-1.7%2B-orange)
+![PowerDNS](https://img.shields.io/badge/PowerDNS-4.7%2B-blue)
 
 **Author:** Intern n°38  
 
@@ -19,6 +23,7 @@
 - [Usage](#usage)
 - [API Documentation](#api-documentation)
 - [Monitoring](#monitoring)
+- [Security](#security)
 - [Changelog](#changelog)
 - [Support](#support)
 - [License](#license)
@@ -231,6 +236,10 @@ ls -la /var/log/pphook*
 - Daily rotation with 30 days retention
 - Automatic compression (.gz)
 - Force rotation if log > 100MB
+
+## Security
+
+For security-related information, vulnerability reporting, and security best practices, please see our [Security Policy](SECURITY.md).
 
 ## Changelog
 

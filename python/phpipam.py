@@ -32,7 +32,7 @@ class PhpIPAMAPI:
         self.session = self._create_session()
 
     def _create_session(self):
-        """Crée une session HTTP optimisée"""
+        """Crée une session HTTP"""
         session = requests.Session()
 
         retry_strategy = Retry(
@@ -295,7 +295,7 @@ class PhpIPAMAPI:
 
     def find_hostname_duplicates(self, addresses):
         """
-        Trouve tous les doublons hostname dans une liste d'adresses - VERSION CORRIGÉE
+        Trouve tous les doublons hostname dans une liste d'adresses
 
         API: Aucun (traitement local)
         Params: addresses (list[dict]) - Liste des adresses à analyser
